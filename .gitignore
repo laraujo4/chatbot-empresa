@@ -1,0 +1,7 @@
+node_modules/
+.wwebjs_cache/
+*.jpg
+*.jpeg
+*.png
+.DS_Store
+.env
