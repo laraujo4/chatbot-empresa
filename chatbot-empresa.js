@@ -23,7 +23,7 @@ const client = new Client({
   }
 });
 
-// serviço de leitura do qr code
+// serviço de leitura do qr code teste
 client.on('qr', qr => {
   console.log('🟨 Escaneie este QR code para conectar o WhatsApp:');
   qrcode.generate(qr, { small: true });
