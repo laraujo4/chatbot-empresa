@@ -1,32 +1,30 @@
-# Use uma imagem base que já inclui Chromium e Node.js.
-# A imagem zenika/alpine-chrome é ideal, e vamos especificar uma versão com Node.js 20 (compatível com 22.20).
-# Se houver problemas, podemos tentar uma versão mais específica ou uma imagem Node.js com instalação manual do Chromium.
-FROM zenika/alpine-chrome:124-with-node
+FROM node:20-slim
 
-# Define o diretório de trabalho dentro do contêiner
+# Instalar Chromium e dependências necessárias
+RUN apt-get update && apt-get install -y \
+    wget gnupg ca-certificates fonts-liberation libx11-6 libx11-xcb1 libxcb-dri3-0 \
+    libxcomposite1 libxdamage1 libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libgbm1 libgtk-3-0 libnspr4 libnss3 libxss1 libxtst6 xdg-utils \
+    chromium --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Define o ambiente como produção
 ENV NODE_ENV=production
+ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium"
+ENV CHROME_PATH="/usr/bin/chromium"
+ENV SESSION_PATH="/data/session"
 
-# Copia os arquivos de definição de dependências (package.json e package-lock.json)
-# para aproveitar o cache do Docker e instalar as dependências primeiro
+# Copia package.json antes para cache
 COPY package*.json ./
 
-# Instala as dependências do Node.js
-# O Chromium já está na imagem base, então o puppeteer não precisará baixá-lo novamente aqui.
-RUN npm install
+# Ajusta dono e instala dependências como usuário node
+RUN chown -R node:node /app
+USER node
+RUN npm ci --production --no-audit --progress=false
 
-# Copia o restante do código da sua aplicação para o contêiner
-COPY . .
+# Copia o restante do código com dono correto
+COPY --chown=node:node . .
 
-# Define a variável de ambiente que o Puppeteer usará para encontrar o executável do Chromium
-# Este caminho é o padrão para o Chromium dentro da imagem zenika/alpine-chrome
-ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium-browser"
-
-# Define a porta que a aplicação irá expor (conforme seu código Node.js)
 EXPOSE 8080
-
-# Comando para iniciar a aplicação quando o contêiner for executado
-# Ajustado para o nome do seu arquivo principal: chatbot-empresa.js
 CMD [ "node", "chatbot-empresa.js" ]
