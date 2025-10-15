@@ -1,7 +1,7 @@
 # Use uma imagem base que já inclui Chromium e Node.js.
 # A imagem zenika/alpine-chrome é ideal, e vamos especificar uma versão com Node.js 20 (compatível com 22.20).
 # Se houver problemas, podemos tentar uma versão mais específica ou uma imagem Node.js com instalação manual do Chromium.
-FROM zenika/alpine-chrome:110-with-node-20
+FROM zenika/alpine-chrome:124-with-node
 
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR /app
