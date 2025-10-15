@@ -15,6 +15,10 @@ ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium"
 ENV CHROME_PATH="/usr/bin/chromium"
 ENV SESSION_PATH="/data/session"
 
+# --- NOVO COMANDO AQUI ---
+# Cria o diretório de sessão e dá permissão ao usuário 'node'
+RUN mkdir -p /data/session && chown -R node:node /data
+
 # Copia package.json antes para cache
 COPY package*.json ./
 
