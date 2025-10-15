@@ -1,11 +1,13 @@
 // leitor de qr code
-const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const fs = require('fs');
 const express = require('express');
 const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
 const puppeteer = require('puppeteer');
 const path = require('path');
+
+// guarda em memória o último QR gerado (dataURL)
+let latestQrDataUrl = null;
 
 // pasta de sessão (pode ser sobrescrita por variável de ambiente)
 const sessionPath = process.env.SESSION_PATH || '/data/session';
@@ -38,28 +40,20 @@ const client = new Client({
   }
 });
 
-// serviço de leitura do qr code teste
+// serviço de leitura do qr code — NÃO imprime QR no log, apenas gera link
 client.on('qr', qr => {
-  console.log('🟨 Escaneie este QR code para conectar o WhatsApp:');
-
-  // 1) versão reduzida pensada para terminais estreitos (qrcode-terminal)
-  try {
-    qrcode.generate(qr, { small: true });
-  } catch (err) {
-    console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
-  }
-
-  // 2) versão alternativa/compacta nos logs (qrcode -> toString tipo 'terminal')
-  //    Não salva arquivo — apenas imprime uma representação ASCII alternativa.
-  QRCode.toString(qr, { type: 'terminal' }, (err, ascii) => {
-    if (err) {
-      console.error('Erro ao gerar versão ASCII do QR (qrcode.toString):', err);
-      return;
-    }
-    console.log('--- Versão reduzida (alternativa) para logs ---');
-    console.log(ascii);
-    console.log('--- Fim da versão reduzida ---');
-  });
+  // gerar dataURL (imagem) em memória — para servir em /qr (não salva arquivo)
+  QRCode.toDataURL(qr, { errorCorrectionLevel: 'H' })
+    .then(dataUrl => {
+      latestQrDataUrl = dataUrl;
+      const port = process.env.PORT || 8080;
+      console.log(`QR disponível — abra no navegador: http://localhost:${port}/qr`);
+      console.log('Se estiver no Railway, abra a URL pública do seu projeto e acrescente /qr (ex.: https://<seu-app>.up.railway.app/qr)');
+      console.log('Obs: nenhum QR foi impresso nos logs — abra a URL acima para escanear.');
+    })
+    .catch(err => {
+      console.error('Erro ao gerar dataURL do QR:', err);
+    });
 });
 
 // ready + log único
@@ -287,6 +281,39 @@ const foraDoHorario = () => {
 // --- Express health / status ---
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// rota que mostra o QR em tamanho grande (sem salvar arquivo)
+// a página atualiza a cada 5 segundos caso o QR tenha expirado/atualizado
+app.get('/qr', (req, res) => {
+  if (!latestQrDataUrl) {
+    return res.send(`<html><body style="font-family: Arial, sans-serif; text-align:center; padding:30px;">\n      <h2>QR ainda não gerado</h2>\n      <p>Aguarde alguns segundos e atualize a página.</p>\n    </body></html>`);
+  }
+
+  const html = `<!doctype html>
+  <html>
+    <head>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width,initial-scale=1"/>
+      <meta http-equiv="refresh" content="5"> <!-- auto-refresh -->
+      <title>QR do WhatsApp - chatbot</title>
+      <style>
+        body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f7f7f7;font-family:Arial,Helvetica,sans-serif}
+        .card{background:white;padding:18px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.08);text-align:center;}
+        img{max-width:100%;height:auto;width:420px;}
+        p{color:#666;font-size:14px;margin-top:8px;}
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h3>Escaneie este QR com o WhatsApp</h3>
+        <img src="${latestQrDataUrl}" alt="QR Code"/>
+        <p>Se o QR expirar, espere o próximo gerar (a página atualiza automaticamente).</p>
+      </div>
+    </body>
+  </html>`;
+
+  res.send(html);
+});
 
 // rota de health
 app.get('/', (req, res) => res.send('OK'));
