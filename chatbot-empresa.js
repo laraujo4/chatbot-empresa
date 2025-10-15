@@ -1,5 +1,6 @@
 // leitor de qr code
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const fs = require('fs');
 const express = require('express');
 const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
@@ -40,7 +41,25 @@ const client = new Client({
 // serviço de leitura do qr code teste
 client.on('qr', qr => {
   console.log('🟨 Escaneie este QR code para conectar o WhatsApp:');
-  qrcode.generate(qr, { small: true });
+
+  // 1) versão reduzida pensada para terminais estreitos (qrcode-terminal)
+  try {
+    qrcode.generate(qr, { small: true });
+  } catch (err) {
+    console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
+  }
+
+  // 2) versão alternativa/compacta nos logs (qrcode -> toString tipo 'terminal')
+  //    Não salva arquivo — apenas imprime uma representação ASCII alternativa.
+  QRCode.toString(qr, { type: 'terminal' }, (err, ascii) => {
+    if (err) {
+      console.error('Erro ao gerar versão ASCII do QR (qrcode.toString):', err);
+      return;
+    }
+    console.log('--- Versão reduzida (alternativa) para logs ---');
+    console.log(ascii);
+    console.log('--- Fim da versão reduzida ---');
+  });
 });
 
 // ready + log único
