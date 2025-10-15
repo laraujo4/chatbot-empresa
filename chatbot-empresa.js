@@ -1,13 +1,11 @@
 // leitor de qr code
+const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const fs = require('fs');
 const express = require('express');
 const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
 const puppeteer = require('puppeteer');
 const path = require('path');
-
-// guarda em memória o último QR gerado (dataURL)
-let latestQrDataUrl = null;
 
 // pasta de sessão (pode ser sobrescrita por variável de ambiente)
 const sessionPath = process.env.SESSION_PATH || '/data/session';
@@ -21,10 +19,12 @@ const client = new Client({
     clientId: 'mili-bot',
     dataPath: path.join(__dirname, 'session')
   }),
- puppeteer: {
+  puppeteer: {
     headless: true,
     executablePath:
-      process.env.CHROME_PATH || puppeteer.executablePath(), // Caminho do Chrome
+      process.env.CHROME_PATH ||
+      puppeteer.executablePath() ||
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // fallback local
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -38,20 +38,16 @@ const client = new Client({
   }
 });
 
-// serviço de leitura do qr code — NÃO imprime QR no log, apenas gera link
+// serviço de leitura do qr code
 client.on('qr', qr => {
-  // gerar dataURL (imagem) em memória — para servir em /qr (não salva arquivo)
-  QRCode.toDataURL(qr, { errorCorrectionLevel: 'H' })
-    .then(dataUrl => {
-      latestQrDataUrl = dataUrl;
-      const port = process.env.PORT || 8080;
-      console.log(`QR disponível — abra no navegador: http://localhost:${port}/qr`);
-      console.log('Se estiver no Railway, abra a URL pública do seu projeto e acrescente /qr (ex.: https://<seu-app>.up.railway.app/qr)');
-      console.log('Obs: nenhum QR foi impresso nos logs — abra a URL acima para escanear.');
-    })
-    .catch(err => {
-      console.error('Erro ao gerar dataURL do QR:', err);
-    });
+  console.log('🟨 Escaneie este QR code para conectar o WhatsApp:');
+
+  // versão reduzida para terminais
+  try {
+    qrcode.generate(qr, { small: true });
+  } catch (err) {
+    console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
+  }
 });
 
 // ready + log único
@@ -63,7 +59,6 @@ client.on('ready', () => {
 client.on('auth_failure', msg => {
   console.error('Falha de autenticação:', msg);
 });
-
 client.on('disconnected', reason => {
   console.warn('Cliente desconectado:', reason);
 });
@@ -71,17 +66,17 @@ client.on('disconnected', reason => {
 // inicializa o client
 client.initialize();
 
-const delay = ms => new Promise(res => setTimeout(res, ms)); // Função que usamos para criar o delay entre uma ação e outra
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
 // --- CONSTANTES / ESTADOS GLOBAIS ---
-const clientesAvisadosForaDoHorario = new Set(); // controla avisos fora do horário
-const userCurrentOption = new Map(); // from -> '1' | '2' | '3'
+const clientesAvisadosForaDoHorario = new Set();
+const userCurrentOption = new Map();
 
 // --- LIMPA A LISTA À MEIA-NOITE ---
 function agendarLimpezaDiaria() {
   const agora = new Date();
   const proximaMeiaNoite = new Date();
-  proximaMeiaNoite.setHours(24, 0, 0, 0); // Próxima 00:00
+  proximaMeiaNoite.setHours(24, 0, 0, 0);
   const tempoAteMeiaNoite = proximaMeiaNoite - agora;
 
   setTimeout(() => {
@@ -90,12 +85,12 @@ function agendarLimpezaDiaria() {
     setInterval(() => {
       clientesAvisadosForaDoHorario.clear();
       console.log('🧹 Lista de clientes fora do horário limpa automaticamente (diária)');
-    }, 24 * 60 * 60 * 1000); // A cada 24h
+    }, 24 * 60 * 60 * 1000);
   }, tempoAteMeiaNoite);
 }
-agendarLimpezaDiaria(); // <- Adicionado
+agendarLimpezaDiaria();
 
-// função helper para enviar o menu (usa pushname do contato se disponível)
+// função helper para enviar o menu
 async function sendMenu(from, contact) {
   try {
     const name = (contact && contact.pushname) ? contact.pushname : 'amigo';
@@ -106,10 +101,10 @@ async function sendMenu(from, contact) {
     if (chat && chat.sendStateTyping) {
       await chat.sendStateTyping();
     }
-    await delay(1000);
 
+    await delay(1000);
     const menu = [
-      'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
+      `Olá, ${firstName}! Seja bem-vindo à *Pamonha e Cia* 🌽`,
       'Sou seu assistente virtual!',
       '',
       'Por favor, escolha uma opção *(digite apenas o número)*:',
@@ -125,10 +120,9 @@ async function sendMenu(from, contact) {
   }
 }
 
-// Funil
+// Funil principal
 client.on('message', async msg => {
   try {
-    // proteção: ignore tipos não-texto (ajuste se quiser tratar imagens com legenda)
     if (msg.type && msg.type !== 'chat') return;
 
     const from = msg.from;
@@ -136,7 +130,7 @@ client.on('message', async msg => {
 
     const chat = await msg.getChat();
 
-    // Fora do horário, com controle por número
+    // Fora do horário
     if (foraDoHorario()) {
       if (!clientesAvisadosForaDoHorario.has(from)) {
         await client.sendMessage(from, '🕒 Nosso horário de atendimento é das 7h às 20h. Deixe sua mensagem e responderemos em breve!');
@@ -145,28 +139,23 @@ client.on('message', async msg => {
       return;
     }
 
-    // Normalizações
     const raw = msg.body || '';
     const rawTrim = raw.trim();
-    if (!rawTrim) return; // mensagem vazia, ignora
+    if (!rawTrim) return;
 
     const text = raw
       .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s]/g, ' ')
       .trim();
 
-    // lista simples de palavras/frases de saudação que queremos detectar
     const greetings = [
-      'menu', 'teste', 'boa',
-      'boa noite', 'boa tarde', 'bom dia', 'noite',
+      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'noite',
       'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
       'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite'
     ];
-
     const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
 
-    // Se for saudação, reabre o menu e limpa qualquer opção anterior
     if (isGreeting) {
       const contact = await msg.getContact();
       userCurrentOption.delete(from);
@@ -174,44 +163,27 @@ client.on('message', async msg => {
       return;
     }
 
-    // Se o usuário já escolheu uma opção anteriormente, não interprete '1','2','3' como novos comandos.
-    // Permitimos apenas:
-    //  - '4' -> volta ao menu inicial (deleta o estado)
-    //  - saudação (tratado acima)
     if (userCurrentOption.has(from)) {
-      // se o usuário pedir para voltar ao menu inicial
       if (rawTrim === '4') {
         const contact = await msg.getContact();
         userCurrentOption.delete(from);
         await sendMenu(from, contact);
         return;
       }
-
-      // qualquer outra mensagem enquanto estiver com opção definida -> não responder (silenciar)
       return;
     }
 
-    // --- Aqui o usuário NÃO tem uma opção ativa -> interpretar a escolha do menu ---
-
-    // Opção 1
+    // --- Opções do menu ---
     if (rawTrim === '1') {
       userCurrentOption.set(from, '1');
-
       await delay(1000);
       await chat.sendStateTyping();
       await delay(1000);
-
-      await client.sendMessage(from,
-        '🛵 Entregamos nossos produtos fresquinhos pra você em Praia Grande, Santos, São Vicente e Mongaguá!\n\n' +
-        'Para outras cidades, consulte disponibilidade.'
-      );
+      await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos pra você em Praia Grande, Santos, São Vicente e Mongaguá!\n\nPara outras cidades, consulte disponibilidade.');
       await delay(1000);
       await chat.sendStateTyping();
       await delay(1000);
-
-      await client.sendMessage(from,
-        '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix* e *débito*!'
-      );
+      await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix* e *débito*!');
 
       try {
         const mediaPath = './Cardápio Empresa.jpg';
@@ -225,41 +197,25 @@ client.on('message', async msg => {
         console.error('Erro ao enviar mídia:', err);
       }
 
-      // Mensagem final pedindo para voltar ao menu se quiser
       await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4');
       return;
     }
 
-    // Opção 2
     if (rawTrim === '2') {
       userCurrentOption.set(from, '2');
-
       await delay(1000);
       await chat.sendStateTyping();
       await delay(1000);
-
-      await client.sendMessage(from,
-        '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\n' +
-        'Se esse for o seu primeiro pedido, por favor, informe:\n' +
-        '📍 Endereço (rua, número, bairro e cidade)\n' +
-        '💵 *O valor do saco de milho é de R$ 90 (tamanho grande)*\n\n' +
-        '(Se quiser voltar ao menu inicial, digite 4)'
-      );
-
+      await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
       return;
     }
 
-    // Opção 3
     if (rawTrim === '3') {
       userCurrentOption.set(from, '3');
-
       await delay(1000);
       await chat.sendStateTyping();
       await delay(1000);
-
-      await client.sendMessage(from,
-        '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4'
-      );
+      await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
       return;
     }
 
@@ -280,39 +236,6 @@ const foraDoHorario = () => {
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// rota que mostra o QR em tamanho grande (sem salvar arquivo)
-// a página atualiza a cada 5 segundos caso o QR tenha expirado/atualizado
-app.get('/qr', (req, res) => {
-  if (!latestQrDataUrl) {
-    return res.send(`<html><body style="font-family: Arial, sans-serif; text-align:center; padding:30px;">\n      <h2>QR ainda não gerado</h2>\n      <p>Aguarde alguns segundos e atualize a página.</p>\n    </body></html>`);
-  }
-
-  const html = `<!doctype html>
-  <html>
-    <head>
-      <meta charset="utf-8"/>
-      <meta name="viewport" content="width=device-width,initial-scale=1"/>
-      <meta http-equiv="refresh" content="5"> <!-- auto-refresh -->
-      <title>QR do WhatsApp - chatbot</title>
-      <style>
-        body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f7f7f7;font-family:Arial,Helvetica,sans-serif}
-        .card{background:white;padding:18px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.08);text-align:center;}
-        img{max-width:100%;height:auto;width:420px;}
-        p{color:#666;font-size:14px;margin-top:8px;}
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <h3>Escaneie este QR com o WhatsApp</h3>
-        <img src="${latestQrDataUrl}" alt="QR Code"/>
-        <p>Se o QR expirar, espere o próximo gerar (a página atualiza automaticamente).</p>
-      </div>
-    </body>
-  </html>`;
-
-  res.send(html);
-});
-
 // rota de health
 app.get('/', (req, res) => res.send('OK'));
 
@@ -322,8 +245,13 @@ app.listen(PORT, '0.0.0.0', () => console.log(`HTTP server rodando na porta ${PO
 // Graceful shutdown
 async function shutdown() {
   console.log('Shutdown iniciado — fechando client...');
-  try { await client.destroy(); } catch (e) { console.error('Erro ao destruir client:', e); }
+  try {
+    await client.destroy();
+  } catch (e) {
+    console.error('Erro ao destruir client:', e);
+  }
   process.exit(0);
 }
+
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
