@@ -21,12 +21,10 @@ const client = new Client({
     clientId: 'mili-bot',
     dataPath: path.join(__dirname, 'session')
   }),
-  puppeteer: {
+ puppeteer: {
     headless: true,
     executablePath:
-      process.env.CHROME_PATH ||
-      puppeteer.executablePath() ||
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // fallback local
+      process.env.CHROME_PATH || puppeteer.executablePath(), // Caminho do Chrome
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
