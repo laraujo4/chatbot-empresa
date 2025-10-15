@@ -1,7 +1,17 @@
+cat >> .gitignore <<'EOF'
+# session e cache do chrome / puppeteer
+/session
+/.wwebjs_cache
+
+# node_modules e logs
 node_modules/
-.wwebjs_cache/
-*.jpg
-*.jpeg
-*.png
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# arquivos do sistema
 .DS_Store
-.env
+Thumbs.db
+EOF
