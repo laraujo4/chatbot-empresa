@@ -3,6 +3,8 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const express = require('express');
 const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
+const puppeteer = require('puppeteer');
+const path = require('path');
 
 // pasta de sessão (pode ser sobrescrita por variável de ambiente)
 const sessionPath = process.env.SESSION_PATH || '/data/session';
@@ -13,13 +15,25 @@ if (!fs.existsSync(sessionPath)) {
 
 const client = new Client({
   authStrategy: new LocalAuth({
-    clientId: 'mili-bot',     // identifica a sessão
-    dataPath: sessionPath     // usa a variável sessionPath
+    clientId: 'mili-bot',
+    dataPath: path.join(__dirname, 'session')
   }),
   puppeteer: {
     headless: true,
-    executablePath: process.env.CHROME_PATH || '/usr/bin/chromium',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    executablePath:
+      process.env.CHROME_PATH ||
+      puppeteer.executablePath() ||
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // fallback local
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu'
+    ]
   }
 });
 
