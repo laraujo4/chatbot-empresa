@@ -14,6 +14,17 @@ if (!fs.existsSync(sessionPath)) {
   console.log('Criada pasta de sessão em', sessionPath);
 }
 
+// pasta pública para servir a imagem do QR
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+  console.log('Criada pasta pública em', publicDir);
+}
+
+// variável para evitar geração excessiva (debounce)
+let lastQr = null;
+let qrWriteTimeout = null;
+
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: 'mili-bot',
@@ -39,14 +50,49 @@ const client = new Client({
 });
 
 // serviço de leitura do qr code
-client.on('qr', qr => {
-  console.log('🟨 Escaneie este QR code para conectar o WhatsApp:');
-
-  // versão reduzida para terminais
+client.on('qr', async qr => {
   try {
-    qrcode.generate(qr, { small: true });
+    console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
+
+    // tenta imprimir versão reduzida no terminal (útil localmente)
+    try {
+      qrcode.generate(qr, { small: true });
+    } catch (err) {
+      console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
+    }
+
+    // debounce: se vários eventos vierem em sequência, só grava depois do intervalo
+    if (qrWriteTimeout) clearTimeout(qrWriteTimeout);
+    qrWriteTimeout = setTimeout(async () => {
+      try {
+        // Se o QR for igual ao último, não regrava (evita I/O desnecessário)
+        if (lastQr && lastQr === qr) {
+          console.log('QR idêntico ao anterior — pulando regravação.');
+          return;
+        }
+
+        // opções: ajuste width/margin/errorCorrectionLevel conforme preferir
+        const opts = {
+          type: 'png',
+          width: 800, // aumenta a resolução para ficar legível
+          margin: 2,
+          errorCorrectionLevel: 'M' // 'L'|'M'|'Q'|'H' -> 'M' é razoável
+        };
+
+        const buffer = await QRCode.toBuffer(qr, opts);
+        const outPath = path.join(publicDir, 'qr.png');
+        fs.writeFileSync(outPath, buffer);
+        lastQr = qr;
+
+        // imprime instrução curta (legível nos logs do Railway)
+        console.log('✅ QR image salva em /public/qr.png');
+        console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.');
+      } catch (err) {
+        console.error('Erro ao gerar PNG do QR:', err);
+      }
+    }, 300); // 300ms debounce, ajuste se quiser
   } catch (err) {
-    console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
+    console.error('Erro no handler de qr:', err);
   }
 });
 
@@ -104,7 +150,7 @@ async function sendMenu(from, contact) {
 
     await delay(1000);
     const menu = [
-      `Olá, ${firstName}! Seja bem-vindo à *Pamonha e Cia* 🌽`,
+      'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
       'Sou seu assistente virtual!',
       '',
       'Por favor, escolha uma opção *(digite apenas o número)*:',
@@ -239,8 +285,38 @@ const PORT = process.env.PORT || 8080;
 // rota de health
 app.get('/', (req, res) => res.send('OK'));
 
+// rota que mostra a imagem (HTML simples)
+app.get('/qr', (req, res) => {
+  const imgPath = path.join(publicDir, 'qr.png');
+  if (fs.existsSync(imgPath)) {
+    const html = ''
+      + '<html>'
+      + '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">'
+      + '<div style="text-align:center">'
+      + '<h3>Escaneie este QR code para conectar o WhatsApp</h3>'
+      + '<img src="/qr.png" style="max-width:90vw;"/>'
+      + '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>'
+      + '</div>'
+      + '</body>'
+      + '</html>';
+    return res.send(html);
+  } else {
+    return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
+  }
+});
+
+// rota para servir o png diretamente
+app.get('/qr.png', (req, res) => {
+  const imgPath = path.join(publicDir, 'qr.png');
+  if (fs.existsSync(imgPath)) {
+    res.sendFile(imgPath);
+  } else {
+    res.status(404).send('QR não disponível');
+  }
+});
+
 // iniciar servidor
-app.listen(PORT, '0.0.0.0', () => console.log(`HTTP server rodando na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log('HTTP server rodando na porta ' + PORT));
 
 // Graceful shutdown
 async function shutdown() {
