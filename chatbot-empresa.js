@@ -196,7 +196,7 @@ client.on('message', async msg => {
       .trim();
 
     const greetings = [
-      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'noite',
+      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
       'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
       'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite'
     ];
