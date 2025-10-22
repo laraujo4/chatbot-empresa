@@ -1,3 +1,5 @@
+'use strict';
+
 // leitor de qr code
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -13,6 +15,54 @@ if (!fs.existsSync(sessionPath)) {
   fs.mkdirSync(sessionPath, { recursive: true });
   console.log('Criada pasta de sessão em', sessionPath);
 }
+
+// ---- controle de saudações diárias (persistente) ----
+const greetingsFile = path.join(sessionPath, 'greetings.json');
+let greetings = {}; // { '<chatId>': 'YYYY-MM-DD', ... }
+let greetingsSaveTimeout = null;
+
+function loadGreetings() {
+  try {
+    if (fs.existsSync(greetingsFile)) {
+      const raw = fs.readFileSync(greetingsFile, 'utf8');
+      greetings = JSON.parse(raw || '{}');
+      console.log('✅ greetings carregado:', Object.keys(greetings).length, 'registros');
+    }
+  } catch (e) {
+    console.warn('Não foi possível carregar greetings.json:', e);
+    greetings = {};
+  }
+}
+function saveGreetingsDebounced() {
+  if (greetingsSaveTimeout) clearTimeout(greetingsSaveTimeout);
+  greetingsSaveTimeout = setTimeout(() => {
+    try {
+      fs.writeFileSync(greetingsFile, JSON.stringify(greetings, null, 2), 'utf8');
+      //console.log('✅ greetings salvo');
+    } catch (e) {
+      console.error('Erro ao salvar greetings.json:', e);
+    }
+  }, 500);
+}
+
+// retorna a data atual no fuso de Brasilia (YYYY-MM-DD)
+function hojeEmBrasil() {
+  // supondo que o servidor esteja em UTC, aplica -3h para obter a data em GMT-3
+  const ms = Date.now() - (3 * 60 * 60 * 1000);
+  const d = new Date(ms);
+  return d.toISOString().slice(0, 10);
+}
+
+function hasGreetedToday(chatId) {
+  return greetings[chatId] === hojeEmBrasil();
+}
+function markGreetedNow(chatId) {
+  greetings[chatId] = hojeEmBrasil();
+  saveGreetingsDebounced();
+}
+
+// carregar na inicialização
+loadGreetings();
 
 // pasta pública para servir a imagem do QR
 const publicDir = path.join(__dirname, 'public');
@@ -35,7 +85,7 @@ const client = new Client({
     executablePath:
       process.env.CHROME_PATH ||
       puppeteer.executablePath() ||
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // fallback local
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -74,9 +124,9 @@ client.on('qr', async qr => {
         // opções: ajuste width/margin/errorCorrectionLevel conforme preferir
         const opts = {
           type: 'png',
-          width: 800, // aumenta a resolução para ficar legível
+          width: 800,
           margin: 2,
-          errorCorrectionLevel: 'M' // 'L'|'M'|'Q'|'H' -> 'M' é razoável
+          errorCorrectionLevel: 'M'
         };
 
         const buffer = await QRCode.toBuffer(qr, opts);
@@ -84,13 +134,12 @@ client.on('qr', async qr => {
         fs.writeFileSync(outPath, buffer);
         lastQr = qr;
 
-        // imprime instrução curta (legível nos logs do Railway)
         console.log('✅ QR image salva em /public/qr.png');
         console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.');
       } catch (err) {
         console.error('Erro ao gerar PNG do QR:', err);
       }
-    }, 300); // 300ms debounce, ajuste se quiser
+    }, 300);
   } catch (err) {
     console.error('Erro no handler de qr:', err);
   }
@@ -121,9 +170,13 @@ const userCurrentOption = new Map();
 // --- LIMPA A LISTA À MEIA-NOITE ---
 function agendarLimpezaDiaria() {
   const agora = new Date();
-  const proximaMeiaNoite = new Date();
-  proximaMeiaNoite.setHours(24, 0, 0, 0);
-  const tempoAteMeiaNoite = proximaMeiaNoite - agora;
+  const msOffset = 3 * 60 * 60 * 1000;
+  const agoraBrasil = new Date(agora.getTime() - msOffset);
+  const proximaMeiaNoiteBrasil = new Date(agoraBrasil);
+  proximaMeiaNoiteBrasil.setHours(24, 0, 0, 0);
+  const proximaExecucaoUTC = new Date(proximaMeiaNoiteBrasil.getTime() + msOffset);
+  const tempoAteMeiaNoite = proximaExecucaoUTC - agora;
+  console.log('🕛 Limpeza agendada para (hora local servidor):', proximaExecucaoUTC.toISOString());
 
   setTimeout(() => {
     clientesAvisadosForaDoHorario.clear();
@@ -189,11 +242,11 @@ client.on('message', async msg => {
     const rawTrim = raw.trim();
     if (!rawTrim) return;
 
-    const text = raw
-      .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\w\s]/g, ' ')
-      .trim();
+   const text = raw
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .trim();
 
     const greetings = [
       'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
@@ -203,9 +256,18 @@ client.on('message', async msg => {
     const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
 
     if (isGreeting) {
+      // se já foi saudado hoje, NÃO reenviamos o menu
+      if (hasGreetedToday(from)) {
+        console.log('Já enviamos saudação hoje para', from);
+        // opcional: responder algo curto em vez de ignorar completamente
+        // await client.sendMessage(from, 'Já nos falamos hoje — em que posso ajudar?');
+        return;
+      }
+
       const contact = await msg.getContact();
       userCurrentOption.delete(from);
       await sendMenu(from, contact);
+      markGreetedNow(from); // registra que já enviamos a saudação hoje
       return;
     }
 
@@ -214,6 +276,7 @@ client.on('message', async msg => {
         const contact = await msg.getContact();
         userCurrentOption.delete(from);
         await sendMenu(from, contact);
+        markGreetedNow(from); // opcional: contar como saudação do dia
         return;
       }
       return;
