@@ -251,6 +251,7 @@ client.on('message', async msg => {
     const greetings = [
       'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
       'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
+      'oi, bom dia', 'oi, boa tarde', 'oi, boa noite',
       'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite'
     ];
     const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
