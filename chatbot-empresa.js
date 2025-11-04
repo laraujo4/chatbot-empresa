@@ -232,7 +232,7 @@ client.on('message', async msg => {
     // Fora do horário
     if (foraDoHorario()) {
       if (!clientesAvisadosForaDoHorario.has(from)) {
-        await client.sendMessage(from, '🕒 Nosso horário de atendimento é das 7h às 20h. Deixe sua mensagem e responderemos em breve!');
+        await client.sendMessage(from, '🕒 Nosso horário de atendimento é das 7h às 19h. Deixe sua mensagem e responderemos em breve!');
         clientesAvisadosForaDoHorario.add(from);
       }
       return;
@@ -293,8 +293,11 @@ client.on('message', async msg => {
       await delay(1000);
       await chat.sendStateTyping();
       await delay(1000);
-      await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix* e *débito*!');
-
+      await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix*, *débito* e *dinheiro*!');
+      await delay(1000);
+      await chat.sendStateTyping();
+      await delay(1000);
+      await client.sendMessage(from, 'Nossas entregas são feitas de terça a domingo, das 8h às 17h! 😉');
       try {
         const mediaPath = './Cardápio Empresa.jpg';
         if (fs.existsSync(mediaPath)) {
