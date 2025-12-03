@@ -248,8 +248,14 @@ const text = rawTrim
   .trim();
 
 
-// Detecta saudações de forma ampla e confiável
-const isGreeting = /\b(oi+|oie+|oiê|ola+|olaa+|e ?ai|eai|ei|oii+|opa+|bom dia|bomdia|boa tarde|boatarde|boa noite|boanoite|boa|bom|menu|teste)\b/.test(text);
+const greetingsList = [
+  'oi','oie','ola','eai','ei','opa',
+  'bom dia','boa tarde','boa noite',
+  'bom','boa','menu','teste', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
+  'ola bom dia', 'ola boa tarde', 'ola boa noite',
+];
+
+const isGreeting = greetingsList.some(g => text.includes(g));
 
     if (isGreeting) {
       // se já foi saudado hoje, NÃO reenviamos o menu
