@@ -222,8 +222,6 @@ async function sendMenu(from, contact) {
 // Funil principal
 client.on('message', async msg => {
   try {
-    if (msg.type && msg.type !== 'chat') return;
-
     const from = msg.from;
     if (!from || !from.endsWith('@c.us')) return;
 
@@ -238,23 +236,20 @@ client.on('message', async msg => {
       return;
     }
 
-    const raw = msg.body || '';
-    const rawTrim = raw.trim();
-    if (!rawTrim) return;
+const raw = msg.body || '';
+const rawTrim = raw.trim();
+if (!rawTrim) return;
 
-   const text = raw
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s]/g, ' ')
-    .trim();
+const text = rawTrim
+  .toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^\w\s]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
-    const greetings = [
-      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
-      'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
-      'oi, bom dia', 'oi, boa tarde', 'oi, boa noite',
-      'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite', 'ola'
-    ];
-    const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
+
+// Detecta saudações de forma ampla e confiável
+const isGreeting = /\b(oi+|oie+|oiê|ola+|olaa+|e ?ai|eai|ei|oii+|opa+|bom dia|bomdia|boa tarde|boatarde|boa noite|boanoite|boa|bom|menu|teste)\b/.test(text);
 
     if (isGreeting) {
       // se já foi saudado hoje, NÃO reenviamos o menu
