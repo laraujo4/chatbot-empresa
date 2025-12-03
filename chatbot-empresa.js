@@ -236,7 +236,7 @@ client.on('message', async msg => {
       return;
     }
 
-const raw = msg.body || '';
+const raw = (typeof msg.body === 'string' ? msg.body : '');
 const rawTrim = raw.trim();
 if (!rawTrim) return;
 
@@ -247,15 +247,20 @@ const text = rawTrim
   .replace(/\s+/g, ' ')
   .trim();
 
-
 const greetingsList = [
   'oi','oie','ola','eai','ei','opa',
   'bom dia','boa tarde','boa noite',
-  'bom','boa','menu','teste', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
-  'ola bom dia', 'ola boa tarde', 'ola boa noite',
+  'menu','teste'
 ];
 
-const isGreeting = greetingsList.some(g => text.includes(g));
+function matchesGreeting(text) {
+  return greetingsList.some(g => {
+    const pattern = new RegExp(`\\b${g.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    return pattern.test(text);
+  });
+}
+
+const isGreeting = matchesGreeting(text);
 
     if (isGreeting) {
       // se já foi saudado hoje, NÃO reenviamos o menu
