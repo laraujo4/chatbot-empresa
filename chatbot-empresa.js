@@ -222,6 +222,8 @@ async function sendMenu(from, contact) {
 // Funil principal
 client.on('message', async msg => {
   try {
+    if (msg.type && msg.type !== 'chat') return;
+
     const from = msg.from;
     if (!from || !from.endsWith('@c.us')) return;
 
@@ -236,31 +238,23 @@ client.on('message', async msg => {
       return;
     }
 
-const raw = (typeof msg.body === 'string' ? msg.body : '');
-const rawTrim = raw.trim();
-if (!rawTrim) return;
+    const raw = msg.body || '';
+    const rawTrim = raw.trim();
+    if (!rawTrim) return;
 
-const text = rawTrim
-  .toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  .replace(/[^\w\s]/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
+   const text = raw
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .trim();
 
-const greetingsList = [
-  'oi','oie','ola','eai','ei','opa',
-  'bom dia','boa tarde','boa noite',
-  'menu','teste'
-];
-
-function matchesGreeting(text) {
-  return greetingsList.some(g => {
-    const pattern = new RegExp(`\\b${g.replace(/\s+/g, '\\s+')}\\b`, 'i');
-    return pattern.test(text);
-  });
-}
-
-const isGreeting = matchesGreeting(text);
+    const greetings = [
+      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
+      'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
+      'oi, bom dia', 'oi, boa tarde', 'oi, boa noite',
+      'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite', 'ola'
+    ];
+    const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
 
     if (isGreeting) {
       // se já foi saudado hoje, NÃO reenviamos o menu
