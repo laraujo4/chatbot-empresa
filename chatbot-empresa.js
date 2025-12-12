@@ -99,40 +99,93 @@ const client = new Client({
   }
 });
 
-// ---------- wrappers seguros para obter contato -------------
+// ---------- wrappers seguros melhorados para obter contato -------------
 async function safeGetContact(msg) {
+  // Tenta várias estratégias, da mais confiável para a menos confiável.
+  // Retorna um objeto com ao menos `.pushname` e `.id._serialized`.
   try {
-    if (!msg || typeof msg.getContact !== 'function') {
-      throw new Error('msg.getContact não disponível');
+    if (msg && typeof msg.getContact === 'function') {
+      const contact = await msg.getContact();
+      contact.pushname = contact.pushname || contact.name || 'amigo';
+      return contact;
     }
-    const contact = await msg.getContact();
-    // normaliza pushname
-    contact.pushname = contact.pushname || contact.name || 'amigo';
-    return contact;
+    throw new Error('msg.getContact não disponível');
   } catch (err) {
-    console.warn('safeGetContact: fallback aplicado ao obter contato:', err && err.message ? err.message : err);
-    const fallback = {
-      pushname: 'amigo',
-      id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' }
-    };
-    return fallback;
+    console.warn('safeGetContact: fallback aplicado ao obter contato via msg.getContact():', err && err.message ? err.message : err);
+    // 1) Tenta extrair nome direto dos dados da mensagem (msg._data)
+    try {
+      const d = msg && (msg._data || msg) ? (msg._data || msg) : {};
+      const maybeName = d.notifyName || d.senderName || d.pushname || d.notify || d.notify || d.authorName;
+      if (maybeName && typeof maybeName === 'string' && maybeName.trim()) {
+        return { pushname: maybeName.trim(), id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' } };
+      }
+    } catch (e) {
+      /* ignora e tenta próximo fallback */
+    }
+
+    // 2) Tenta obter chat e ler título/contato (mais estável em algumas versões)
+    try {
+      if (msg && msg.from) {
+        const chat = await client.getChatById(msg.from).catch(()=>null);
+        if (chat) {
+          // chat.formattedTitle ou chat.name podem existir dependendo do tipo de chat
+          const chatName = chat.formattedTitle || chat.name || (chat.contact && (chat.contact.pushname || chat.contact.name));
+          if (chatName && typeof chatName === 'string') {
+            return { pushname: chatName, id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' } };
+          }
+          // se chat.contact existir com pushname, retorna ele
+          if (chat.contact && (chat.contact.pushname || chat.contact.name)) {
+            return { pushname: chat.contact.pushname || chat.contact.name, id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' } };
+          }
+        }
+      }
+    } catch (e) {
+      // ignora e tenta próximo fallback
+      console.warn('safeGetContact: fallback chat falhou:', e && e.message ? e.message : e);
+    }
+
+    // 3) Por fim, tenta client.getContactById (pode falhar do mesmo jeito que msg.getContact)
+    try {
+      if (client && typeof client.getContactById === 'function' && msg && msg.from) {
+        const c = await client.getContactById(msg.from).catch(()=>null);
+        if (c) {
+          c.pushname = c.pushname || c.name || 'amigo';
+          return c;
+        }
+      }
+    } catch (e) {
+      console.warn('safeGetContact: client.getContactById também falhou:', e && e.message ? e.message : e);
+    }
+
+    // 4) fallback definitivo
+    return { pushname: 'amigo', id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' } };
   }
 }
 
 async function safeGetContactById(clientInstance, id) {
   try {
-    if (!clientInstance || typeof clientInstance.getContactById !== 'function') {
-      throw new Error('client.getContactById não disponível');
+    if (clientInstance && typeof clientInstance.getContactById === 'function') {
+      const contact = await clientInstance.getContactById(id);
+      contact.pushname = contact.pushname || contact.name || 'amigo';
+      return contact;
     }
-    const contact = await clientInstance.getContactById(id);
-    contact.pushname = contact.pushname || contact.name || 'amigo';
-    return contact;
+    throw new Error('client.getContactById não disponível');
   } catch (err) {
     console.warn('safeGetContactById: fallback aplicado ao obter contato por id:', err && err.message ? err.message : err);
+    // tenta chat por id
+    try {
+      const chat = await clientInstance.getChatById(id).catch(()=>null);
+      if (chat) {
+        const chatName = chat.formattedTitle || chat.name || (chat.contact && (chat.contact.pushname || chat.contact.name));
+        if (chatName) return { pushname: chatName, id: { _serialized: id } };
+      }
+    } catch (e) {
+      console.warn('safeGetContactById: fallback via chat falhou:', e && e.message ? e.message : e);
+    }
     return { pushname: 'amigo', id: { _serialized: id } };
   }
 }
-// ---------- fim wrappers ----------------------------------------
+// ---------- fim wrappers melhorados ----------------------------------------
 
 /* serviço de leitura do qr code */
 client.on('qr', async qr => {
