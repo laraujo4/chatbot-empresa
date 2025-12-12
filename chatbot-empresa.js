@@ -99,7 +99,42 @@ const client = new Client({
   }
 });
 
-// serviço de leitura do qr code
+// ---------- wrappers seguros para obter contato -------------
+async function safeGetContact(msg) {
+  try {
+    if (!msg || typeof msg.getContact !== 'function') {
+      throw new Error('msg.getContact não disponível');
+    }
+    const contact = await msg.getContact();
+    // normaliza pushname
+    contact.pushname = contact.pushname || contact.name || 'amigo';
+    return contact;
+  } catch (err) {
+    console.warn('safeGetContact: fallback aplicado ao obter contato:', err && err.message ? err.message : err);
+    const fallback = {
+      pushname: 'amigo',
+      id: { _serialized: (msg && msg.from) ? msg.from : 'unknown@c.us' }
+    };
+    return fallback;
+  }
+}
+
+async function safeGetContactById(clientInstance, id) {
+  try {
+    if (!clientInstance || typeof clientInstance.getContactById !== 'function') {
+      throw new Error('client.getContactById não disponível');
+    }
+    const contact = await clientInstance.getContactById(id);
+    contact.pushname = contact.pushname || contact.name || 'amigo';
+    return contact;
+  } catch (err) {
+    console.warn('safeGetContactById: fallback aplicado ao obter contato por id:', err && err.message ? err.message : err);
+    return { pushname: 'amigo', id: { _serialized: id } };
+  }
+}
+// ---------- fim wrappers ----------------------------------------
+
+/* serviço de leitura do qr code */
 client.on('qr', async qr => {
   try {
     console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
@@ -196,9 +231,16 @@ async function sendMenu(from, contact) {
     const firstName = name.split(' ')[0];
 
     await delay(1000);
-    const chat = await client.getChatById(from);
+    // tenta obter chat de forma segura
+    let chat = null;
+    try {
+      chat = await client.getChatById(from);
+    } catch (e) {
+      console.warn('sendMenu: não foi possível obter chat via client.getChatById():', e && e.message ? e.message : e);
+    }
+
     if (chat && chat.sendStateTyping) {
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
     }
 
     await delay(1000);
@@ -242,15 +284,15 @@ client.on('message', async msg => {
     const rawTrim = raw.trim();
     if (!rawTrim) return;
 
-   const text = raw
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s]/g, ' ')
-    .trim();
+    const text = raw
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s]/g, ' ')
+      .trim();
 
     const greetings = [
-      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia',
-      'oi', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
+      'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
+      'oi','oii','oiii', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
       'oi, bom dia', 'oi, boa tarde', 'oi, boa noite',
       'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite', 'ola'
     ];
@@ -265,7 +307,8 @@ client.on('message', async msg => {
         return;
       }
 
-      const contact = await msg.getContact();
+      // substituído: usa wrapper seguro
+      const contact = await safeGetContact(msg);
       userCurrentOption.delete(from);
       await sendMenu(from, contact);
       markGreetedNow(from); // registra que já enviamos a saudação hoje
@@ -274,7 +317,8 @@ client.on('message', async msg => {
 
     if (userCurrentOption.has(from)) {
       if (rawTrim === '4') {
-        const contact = await msg.getContact();
+        // substituído: usa wrapper seguro
+        const contact = await safeGetContact(msg);
         userCurrentOption.delete(from);
         await sendMenu(from, contact);
         markGreetedNow(from); // opcional: contar como saudação do dia
@@ -287,17 +331,18 @@ client.on('message', async msg => {
     if (rawTrim === '1') {
       userCurrentOption.set(from, '1');
       await delay(1000);
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
       await delay(1000);
       await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos pra você em Praia Grande, Santos, São Vicente e Mongaguá!\n\nPara outras cidades, consulte disponibilidade.');
       await delay(1000);
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
       await delay(1000);
       await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix*, *débito* e *dinheiro*!');
       await delay(1000);
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
       await delay(1000);
-      await client.sendMessage(from, 'Nossas entregas são feitas de terça a domingo, das 8h às 17h! 😉');
+      await client.sendMessage(from, 'A taxa de entrega é de R$ 5,00. Nossas entregas são feitas de terça a domingo, das 8h às 17h! 😉');
+
       try {
         const mediaPath = './Cardápio Empresa.jpg';
         if (fs.existsSync(mediaPath)) {
@@ -317,7 +362,7 @@ client.on('message', async msg => {
     if (rawTrim === '2') {
       userCurrentOption.set(from, '2');
       await delay(1000);
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
       await delay(1000);
       await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
       return;
@@ -326,7 +371,7 @@ client.on('message', async msg => {
     if (rawTrim === '3') {
       userCurrentOption.set(from, '3');
       await delay(1000);
-      await chat.sendStateTyping();
+      try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
       await delay(1000);
       await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
       return;
@@ -398,3 +443,12 @@ async function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// ---------- NOVO: captura global de erros não tratados para evitar crashes silenciosos ----------
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', err => {
+  console.error('Uncaught Exception:', err);
+  // opcional: chamar shutdown() se achar necessário
+})
