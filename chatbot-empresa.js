@@ -38,7 +38,6 @@ function saveGreetingsDebounced() {
   greetingsSaveTimeout = setTimeout(() => {
     try {
       fs.writeFileSync(greetingsFile, JSON.stringify(greetings, null, 2), 'utf8');
-      //console.log('✅ greetings salvo');
     } catch (e) {
       console.error('Erro ao salvar greetings.json:', e);
     }
@@ -47,7 +46,6 @@ function saveGreetingsDebounced() {
 
 // retorna a data atual no fuso de Brasilia (YYYY-MM-DD)
 function hojeEmBrasil() {
-  // supondo que o servidor esteja em UTC, aplica -3h para obter a data em GMT-3
   const ms = Date.now() - (3 * 60 * 60 * 1000);
   const d = new Date(ms);
   return d.toISOString().slice(0, 10);
@@ -93,7 +91,6 @@ const client = new Client({
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--single-process',
       '--disable-gpu'
     ]
   }
@@ -103,7 +100,6 @@ const client = new Client({
 async function safeGetContact(msg) {
   const from = msg && msg.from ? msg.from : 'unknown@c.us';
 
-  // 1) Tenta extrair nome diretamente da estrutura interna do WhatsApp
   try {
     const d = msg._data || {};
     const maybeName =
@@ -123,7 +119,6 @@ async function safeGetContact(msg) {
     console.warn('safeGetContact: falha ao ler nome de msg._data:', err);
   }
 
-  // 2) Tenta obter nome pelo chat
   try {
     const chat = await client.getChatById(from).catch(() => null);
     if (chat) {
@@ -143,38 +138,31 @@ async function safeGetContact(msg) {
     console.warn('safeGetContact: falha ao tentar via chat:', err);
   }
 
-  // 3) Fallback seguro
   return {
     pushname: 'amigo',
     id: { _serialized: from }
   };
 }
 
-// ---------- fim wrappers melhorados ----------------------------------------
-
 /* serviço de leitura do qr code */
 client.on('qr', async qr => {
   try {
     console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
 
-    // tenta imprimir versão reduzida no terminal (útil localmente)
     try {
       qrcode.generate(qr, { small: true });
     } catch (err) {
       console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
     }
 
-    // debounce: se vários eventos vierem em sequência, só grava depois do intervalo
     if (qrWriteTimeout) clearTimeout(qrWriteTimeout);
     qrWriteTimeout = setTimeout(async () => {
       try {
-        // Se o QR for igual ao último, não regrava (evita I/O desnecessário)
         if (lastQr && lastQr === qr) {
           console.log('QR idêntico ao anterior — pulando regravação.');
           return;
         }
 
-        // opções: ajuste width/margin/errorCorrectionLevel conforme preferir
         const opts = {
           type: 'png',
           width: 800,
@@ -198,12 +186,10 @@ client.on('qr', async qr => {
   }
 });
 
-// ready + log único
 client.on('ready', () => {
   console.log('✅ WhatsApp conectado com sucesso!');
 });
 
-// logs úteis de eventos de auth/disconnect
 client.on('auth_failure', msg => {
   console.error('Falha de autenticação:', msg);
 });
@@ -211,16 +197,13 @@ client.on('disconnected', reason => {
   console.warn('Cliente desconectado:', reason);
 });
 
-// inicializa o client
 client.initialize();
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
-// --- CONSTANTES / ESTADOS GLOBAIS ---
 const clientesAvisadosForaDoHorario = new Set();
 const userCurrentOption = new Map();
 
-// --- LIMPA A LISTA À MEIA-NOITE ---
 function agendarLimpezaDiaria() {
   const agora = new Date();
   const msOffset = 3 * 60 * 60 * 1000;
@@ -242,14 +225,12 @@ function agendarLimpezaDiaria() {
 }
 agendarLimpezaDiaria();
 
-// função helper para enviar o menu
 async function sendMenu(from, contact) {
   try {
     const name = (contact && contact.pushname) ? contact.pushname : 'amigo';
     const firstName = name.split(' ')[0];
 
     await delay(1000);
-    // tenta obter chat de forma segura
     let chat = null;
     try {
       chat = await client.getChatById(from);
@@ -281,13 +262,29 @@ async function sendMenu(from, contact) {
 
 // Funil principal
 client.on('message', async msg => {
+  // LOG DE DEBUG
+  console.log('📨 MSG RECEBIDA:', {
+    from: msg.from,
+    type: msg.type,
+    body: (msg.body || '').substring(0, 50),
+    hasOption: userCurrentOption.has(msg.from),
+    greetedToday: hasGreetedToday(msg.from),
+    timestamp: new Date().toISOString()
+  });
+
   try {
-    if (msg.type && msg.type !== 'chat') return;
+    // CORREÇÃO: aceita 'chat' e 'text'
+    if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
     const from = msg.from;
     if (!from || !from.endsWith('@c.us')) return;
 
-    const chat = await msg.getChat();
+let chat = null;
+try {
+  chat = await msg.getChat();
+} catch (e) {
+  console.warn('⚠️ Falha ao obter chat via msg.getChat():', e?.message || e);
+}
 
     // Fora do horário
     if (foraDoHorario()) {
@@ -308,38 +305,38 @@ client.on('message', async msg => {
       .replace(/[^\w\s]/g, ' ')
       .trim();
 
-    const greetings = [
+    const greetingsList = [
       'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
       'oi','oii','oiii', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
       'oi, bom dia', 'oi, boa tarde', 'oi, boa noite',
       'olá', 'olá bom dia', 'olá boa tarde', 'olá boa noite', 'ola'
     ];
-    const isGreeting = greetings.some(g => text.includes(g.replace(/á/g, 'a')));
+    const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
 
     if (isGreeting) {
-      // se já foi saudado hoje, NÃO reenviamos o menu
+      // CORREÇÃO: responde mesmo se já foi saudado hoje
       if (hasGreetedToday(from)) {
         console.log('Já enviamos saudação hoje para', from);
-        // opcional: responder algo curto em vez de ignorar completamente
-        // await client.sendMessage(from, 'Já nos falamos hoje — em que posso ajudar?');
+        await delay(500);
+        try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+        await delay(1000);
+        await client.sendMessage(from, 'Olá novamente! 😊\n\nDigite o número da opção desejada:\n\n1️⃣ Fazer um pedido\n2️⃣ Encomendar milho\n3️⃣ Falar com um atendente');
         return;
       }
 
-      // substituído: usa wrapper seguro
       const contact = await safeGetContact(msg);
       userCurrentOption.delete(from);
       await sendMenu(from, contact);
-      markGreetedNow(from); // registra que já enviamos a saudação hoje
+      markGreetedNow(from);
       return;
     }
 
     if (userCurrentOption.has(from)) {
       if (rawTrim === '4') {
-        // substituído: usa wrapper seguro
         const contact = await safeGetContact(msg);
         userCurrentOption.delete(from);
         await sendMenu(from, contact);
-        markGreetedNow(from); // opcional: contar como saudação do dia
+        markGreetedNow(from);
         return;
       }
       return;
@@ -400,22 +397,20 @@ client.on('message', async msg => {
   }
 });
 
-// --- HORÁRIO DE FUNCIONAMENTO ---
+// CORREÇÃO: horário consistente (7h às 19h)
 const foraDoHorario = () => {
   const agora = new Date();
   const horaUTC = agora.getUTCHours();
-  const horaBrasilia = (horaUTC - 3 + 24) % 24; // GMT-3
-  return (horaBrasilia < 7 || horaBrasilia >= 20);
+  const horaBrasilia = (horaUTC - 3 + 24) % 24;
+  return (horaBrasilia < 7 || horaBrasilia >= 19);
 };
 
 // --- Express health / status ---
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// rota de health
 app.get('/', (req, res) => res.send('OK'));
 
-// rota que mostra a imagem (HTML simples)
 app.get('/qr', (req, res) => {
   const imgPath = path.join(publicDir, 'qr.png');
   if (fs.existsSync(imgPath)) {
@@ -435,7 +430,6 @@ app.get('/qr', (req, res) => {
   }
 });
 
-// rota para servir o png diretamente
 app.get('/qr.png', (req, res) => {
   const imgPath = path.join(publicDir, 'qr.png');
   if (fs.existsSync(imgPath)) {
@@ -445,10 +439,8 @@ app.get('/qr.png', (req, res) => {
   }
 });
 
-// iniciar servidor
 app.listen(PORT, '0.0.0.0', () => console.log('HTTP server rodando na porta ' + PORT));
 
-// Graceful shutdown
 async function shutdown() {
   console.log('Shutdown iniciado — fechando client...');
   try {
@@ -462,11 +454,9 @@ async function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-// ---------- NOVO: captura global de erros não tratados para evitar crashes silenciosos ----------
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 process.on('uncaughtException', err => {
   console.error('Uncaught Exception:', err);
-  // opcional: chamar shutdown() se achar necessário
-})
+});
