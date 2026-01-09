@@ -277,7 +277,7 @@
       if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
       const from = msg.from;
-      if (!from || !from.endsWith('@c.us')) return;
+      if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
 
   let chat = null;
   try {
