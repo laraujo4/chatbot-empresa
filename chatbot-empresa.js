@@ -247,7 +247,7 @@ client.on('message', async msg => {
         // Fora do horário
         if (foraDoHorario()) {
             if (!clientesAvisadosForaDoHorario.has(from)) {
-                await client.sendMessage(from, '🕒 Nosso horário de atendimento é das 7h às 19h. Deixe sua mensagem e responderemos em breve!');
+                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!');
                 clientesAvisadosForaDoHorario.add(from);
             }
             return;
@@ -265,7 +265,7 @@ client.on('message', async msg => {
 
         const greetingsList = [
             'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
-            'oi','oii','oiii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
+            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
             'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
             'olá boa tarde', 'olá boa noite', 'ola','olaa'
         ];
@@ -302,15 +302,11 @@ client.on('message', async msg => {
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos pra você em Praia Grande, Santos, São Vicente e Mongaguá!\n\nPara outras cidades, consulte disponibilidade.');
+            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.\n\n💳 Aceitamos *Pix*, *débito* e *dinheiro*!');
-            await delay(1000);
-            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
-            await delay(1000);
-            await client.sendMessage(from, 'A taxa de entrega é de R$ 5,00. Nossas entregas são feitas de terça a domingo, das 8h às 17h! 😉');
+            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
             try {
                 const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
@@ -349,12 +345,12 @@ client.on('message', async msg => {
     }
 });
 
-// CORREÇÃO: horário consistente (7h às 19h)
+// CORREÇÃO: horário consistente (5h às 23h)
 const foraDoHorario = () => {
     const agora = new Date();
     const horaUTC = agora.getUTCHours();
     const horaBrasilia = (horaUTC - 3 + 24) % 24;
-    return (horaBrasilia < 7 || horaBrasilia >= 19);
+    return (horaBrasilia < 5 || horaBrasilia >= 23);
 };
 
 // --- Express health / status ---
