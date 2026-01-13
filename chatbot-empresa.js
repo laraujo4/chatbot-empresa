@@ -302,7 +302,7 @@ client.on('message', async msg => {
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
+            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
