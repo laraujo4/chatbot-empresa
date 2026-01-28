@@ -18,7 +18,7 @@ if (!fs.existsSync(sessionPath)) {
 
 // ---- controle de saudações diárias (persistente) ----
 const greetingsFile = path.join(sessionPath, 'greetings.json');
-let greetings = {}; // { '<chatId>': 'YYYY-MM-DD', ... }
+let greetings = {};
 let greetingsSaveTimeout = null;
 
 function loadGreetings() {
@@ -45,7 +45,6 @@ function saveGreetingsDebounced() {
     }, 500);
 }
 
-// retorna a data atual no fuso de Brasilia (YYYY-MM-DD)
 function hojeEmBrasil() {
     const ms = Date.now() - (3 * 60 * 60 * 1000);
     const d = new Date(ms);
@@ -61,7 +60,6 @@ function markGreetedNow(chatId) {
     saveGreetingsDebounced();
 }
 
-// carregar na inicialização
 loadGreetings();
 
 // pasta pública para servir a imagem do QR
@@ -71,7 +69,6 @@ if (!fs.existsSync(publicDir)) {
     console.log('Criada pasta pública em', publicDir);
 }
 
-// variável para evitar geração excessiva (debounce)
 let lastQr = null;
 let qrWriteTimeout = null;
 
@@ -95,7 +92,6 @@ const client = new Client({
     }
 });
 
-// ---------- wrappers seguros melhorados para obter contato -------------
 async function safeGetContact(msg) {
     const from = msg && msg.from ? msg.from : 'unknown@c.us';
     try {
@@ -123,7 +119,6 @@ async function safeGetContact(msg) {
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
-/* serviço de leitura do qr code */
 client.on('qr', async qr => {
     try {
         console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
@@ -146,7 +141,7 @@ client.on('qr', async qr => {
                 fs.writeFileSync(outPath, buffer);
                 lastQr = qr;
                 console.log('✅ QR image salva em /public/qr.png');
-                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.'  );
+                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.');
             } catch (err) {
                 console.error('Erro ao gerar PNG do QR:', err);
             }
@@ -221,17 +216,14 @@ async function sendMenu(from, contact) {
             '2️⃣ Encomendar milho',
             '3️⃣ Falar com um atendente'
         ].join('\n');
-        await client.sendMessage(from, menu);
+        await client.sendMessage(from, menu, { sendSeen: false });
     } catch (err) {
         console.error('Erro em sendMenu:', err);
     }
 }
 
-// Funil principal
 client.on('message', async msg => {
-
     try {
-        // CORREÇÃO: aceita 'chat' e 'text'
         if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
         const from = msg.from;
@@ -244,10 +236,9 @@ client.on('message', async msg => {
             console.warn('⚠️ Falha ao obter chat via msg.getChat():', e?.message || e);
         }
 
-        // Fora do horário
         if (foraDoHorario()) {
             if (!clientesAvisadosForaDoHorario.has(from)) {
-                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!');
+                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!', { sendSeen: false });
                 clientesAvisadosForaDoHorario.add(from);
             }
             return;
@@ -264,16 +255,15 @@ client.on('message', async msg => {
             .trim();
 
         const greetingsList = [
-            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
-            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
+            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'boa dia',
+            'oi', 'oii', 'ola', 'oi bom dia', 'oi boa tarde', 'boa tardr', 'oi boa noite',
             'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
-            'olá boa tarde', 'olá boa noite', 'ola','olaa'
+            'olá boa tarde', 'olá boa noite', 'ola', 'olaa'
         ];
 
         const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
 
         if (isGreeting) {
-            // CORREÇÃO: Apenas ignora se já foi saudado hoje, sem enviar o menu novamente
             if (hasGreetedToday(from)) {
                 console.log('Já enviamos saudação hoje para', from);
                 return;
@@ -296,29 +286,28 @@ client.on('message', async msg => {
             return;
         }
 
-        // --- Opções do menu ---
         if (rawTrim === '1') {
             userCurrentOption.set(from, '1');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
+            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.', { sendSeen: false });
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
+            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉', { sendSeen: false });
             try {
                 const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
                     const media = MessageMedia.fromFilePath(mediaPath);
-                    await client.sendMessage(from, media, { caption: '📋 Cardápio' });
+                    await client.sendMessage(from, media, { caption: '📋 Cardápio', sendSeen: false });
                 } else {
                     console.warn('Arquivo de mídia não encontrado:', mediaPath);
                 }
             } catch (err) {
                 console.error('Erro ao enviar mídia:', err);
             }
-            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4');
+            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4', { sendSeen: false });
             return;
         }
 
@@ -327,7 +316,7 @@ client.on('message', async msg => {
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
+            await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)', { sendSeen: false });
             return;
         }
 
@@ -336,7 +325,7 @@ client.on('message', async msg => {
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
+            await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4', { sendSeen: false });
             return;
         }
 
@@ -345,7 +334,6 @@ client.on('message', async msg => {
     }
 });
 
-// CORREÇÃO: horário consistente (5h às 23h)
 const foraDoHorario = () => {
     const agora = new Date();
     const horaUTC = agora.getUTCHours();
@@ -362,16 +350,26 @@ app.get('/', (req, res) => res.send('OK'));
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        const html = '' +
-            '<html>' +
-            '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">' +
-            '<div style="text-align:center">' +
-            '<h3>Escaneie este QR code para conectar o WhatsApp</h3>' +
-            '<img src="/qr.png" style="max-width:90vw;"/>' +
-            '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>' +
-            '</div>' +
-            '</body>' +
-            '</html>';
+        const html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="10">
+    <title>QR Code - WhatsApp</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
+        img { max-width: 400px; border: 5px solid #25D366; border-radius: 10px; }
+        h1 { color: #333; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <h1>Escaneie este QR code para conectar o WhatsApp</h1>
+    <img src="/qr.png" alt="QR Code">
+    <p>Atualiza automaticamente quando um novo QR for emitido.</p>
+</body>
+</html>`;
         return res.send(html);
     } else {
         return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
