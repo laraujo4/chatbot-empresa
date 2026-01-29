@@ -223,11 +223,31 @@ async function sendMenu(from, contact) {
 }
 
 client.on('message', async msg => {
+    // ========== DEBUG LOG - INÍCIO ==========
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📨 NOVA MENSAGEM RECEBIDA');
+    console.log('  from:', msg.from);
+    console.log('  type:', msg.type);
+    console.log('  body:', msg.body);
+    console.log('  fromMe:', msg.fromMe);
+    console.log('  isStatus:', msg.isStatus);
+    console.log('  foraDoHorario():', foraDoHorario());
+    console.log('  hasGreetedToday:', hasGreetedToday(msg.from));
+    console.log('  userCurrentOption:', userCurrentOption.get(msg.from) || 'nenhuma');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    // ========== DEBUG LOG - FIM ==========
+
     try {
-        if (msg.type && !['chat', 'text'].includes(msg.type)) return;
+        if (msg.type && !['chat', 'text'].includes(msg.type)) {
+            console.log('⏭️ Ignorando: tipo não suportado ->', msg.type);
+            return;
+        }
 
         const from = msg.from;
-        if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
+        if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) {
+            console.log('⏭️ Ignorando: grupo ou broadcast');
+            return;
+        }
 
         let chat = null;
         try {
@@ -237,22 +257,31 @@ client.on('message', async msg => {
         }
 
         if (foraDoHorario()) {
+            console.log('🕒 Fora do horário de atendimento');
             if (!clientesAvisadosForaDoHorario.has(from)) {
                 await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!', { sendSeen: false });
                 clientesAvisadosForaDoHorario.add(from);
+                console.log('✅ Mensagem fora do horário enviada');
+            } else {
+                console.log('⏭️ Cliente já foi avisado sobre horário hoje');
             }
             return;
         }
 
         const raw = msg.body || '';
         const rawTrim = raw.trim();
-        if (!rawTrim) return;
+        if (!rawTrim) {
+            console.log('⏭️ Ignorando: mensagem vazia');
+            return;
+        }
 
         const text = raw
             .toLowerCase()
             .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
             .replace(/[^\w\s]/g, ' ')
             .trim();
+
+        console.log('📝 Texto normalizado:', text);
 
         const greetingsList = [
             'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'boa dia',
@@ -262,31 +291,37 @@ client.on('message', async msg => {
         ];
 
         const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
+        console.log('👋 É saudação?', isGreeting);
 
         if (isGreeting) {
             if (hasGreetedToday(from)) {
-                console.log('Já enviamos saudação hoje para', from);
+                console.log('⏭️ Já enviamos saudação hoje para', from);
                 return;
             }
             const contact = await safeGetContact(msg);
             userCurrentOption.delete(from);
             await sendMenu(from, contact);
             markGreetedNow(from);
+            console.log('✅ Menu enviado para', from);
             return;
         }
 
         if (userCurrentOption.has(from)) {
+            console.log('📌 Usuário está em submenu:', userCurrentOption.get(from));
             if (rawTrim === '4') {
                 const contact = await safeGetContact(msg);
                 userCurrentOption.delete(from);
                 await sendMenu(from, contact);
                 markGreetedNow(from);
+                console.log('✅ Voltou ao menu principal');
                 return;
             }
+            console.log('⏭️ Ignorando (usuário em submenu, aguardando texto livre ou 4)');
             return;
         }
 
         if (rawTrim === '1') {
+            console.log('🔢 Opção 1 selecionada');
             userCurrentOption.set(from, '1');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
@@ -308,26 +343,34 @@ client.on('message', async msg => {
                 console.error('Erro ao enviar mídia:', err);
             }
             await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4', { sendSeen: false });
+            console.log('✅ Opção 1 processada');
             return;
         }
 
         if (rawTrim === '2') {
+            console.log('🔢 Opção 2 selecionada');
             userCurrentOption.set(from, '2');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
             await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)', { sendSeen: false });
+            console.log('✅ Opção 2 processada');
             return;
         }
 
         if (rawTrim === '3') {
+            console.log('🔢 Opção 3 selecionada');
             userCurrentOption.set(from, '3');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
             await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4', { sendSeen: false });
+            console.log('✅ Opção 3 processada');
             return;
         }
+
+        // Se chegou aqui, mensagem não reconhecida no menu principal
+        console.log('❓ Mensagem não reconhecida no menu principal:', rawTrim);
 
     } catch (err) {
         console.error('❌ Erro no processamento da mensagem:', err);
@@ -350,23 +393,22 @@ app.get('/', (req, res) => res.send('OK'));
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        const html = `
-<!DOCTYPE html>
+        const html = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="refresh" content="10">
-    <title>QR Code - WhatsApp</title>
+    <title>QR Code WhatsApp</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
-        img { max-width: 400px; border: 5px solid #25D366; border-radius: 10px; }
+        body { font-family: sans-serif; text-align: center; padding: 40px; background: #f0f0f0; }
+        img { max-width: 400px; border: 4px solid #25D366; border-radius: 12px; }
         h1 { color: #333; }
         p { color: #666; }
     </style>
 </head>
 <body>
     <h1>Escaneie este QR code para conectar o WhatsApp</h1>
-    <img src="/qr.png" alt="QR Code">
+    <img src="/qr.png?t=${Date.now()}" alt="QR Code" />
     <p>Atualiza automaticamente quando um novo QR for emitido.</p>
 </body>
 </html>`;
