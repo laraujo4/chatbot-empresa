@@ -18,7 +18,7 @@ if (!fs.existsSync(sessionPath)) {
 
 // ---- controle de saudações diárias (persistente) ----
 const greetingsFile = path.join(sessionPath, 'greetings.json');
-let greetings = {};
+let greetings = {}; // { '<chatId>': 'YYYY-MM-DD', ... }
 let greetingsSaveTimeout = null;
 
 function loadGreetings() {
@@ -45,6 +45,7 @@ function saveGreetingsDebounced() {
     }, 500);
 }
 
+// retorna a data atual no fuso de Brasilia (YYYY-MM-DD)
 function hojeEmBrasil() {
     const ms = Date.now() - (3 * 60 * 60 * 1000);
     const d = new Date(ms);
@@ -60,6 +61,7 @@ function markGreetedNow(chatId) {
     saveGreetingsDebounced();
 }
 
+// carregar na inicialização
 loadGreetings();
 
 // pasta pública para servir a imagem do QR
@@ -69,6 +71,7 @@ if (!fs.existsSync(publicDir)) {
     console.log('Criada pasta pública em', publicDir);
 }
 
+// variável para evitar geração excessiva (debounce)
 let lastQr = null;
 let qrWriteTimeout = null;
 
@@ -92,6 +95,7 @@ const client = new Client({
     }
 });
 
+// ---------- wrappers seguros melhorados para obter contato -------------
 async function safeGetContact(msg) {
     const from = msg && msg.from ? msg.from : 'unknown@c.us';
     try {
@@ -119,6 +123,7 @@ async function safeGetContact(msg) {
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
+/* serviço de leitura do qr code */
 client.on('qr', async qr => {
     try {
         console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
@@ -141,7 +146,7 @@ client.on('qr', async qr => {
                 fs.writeFileSync(outPath, buffer);
                 lastQr = qr;
                 console.log('✅ QR image salva em /public/qr.png');
-                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.');
+                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.'  );
             } catch (err) {
                 console.error('Erro ao gerar PNG do QR:', err);
             }
@@ -216,38 +221,21 @@ async function sendMenu(from, contact) {
             '2️⃣ Encomendar milho',
             '3️⃣ Falar com um atendente'
         ].join('\n');
-        await client.sendMessage(from, menu, { sendSeen: false });
+        await client.sendMessage(from, menu);
     } catch (err) {
         console.error('Erro em sendMenu:', err);
     }
 }
 
+// Funil principal
 client.on('message', async msg => {
-    // ========== DEBUG LOG - INÍCIO ==========
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📨 NOVA MENSAGEM RECEBIDA');
-    console.log('  from:', msg.from);
-    console.log('  type:', msg.type);
-    console.log('  body:', msg.body);
-    console.log('  fromMe:', msg.fromMe);
-    console.log('  isStatus:', msg.isStatus);
-    console.log('  foraDoHorario():', foraDoHorario());
-    console.log('  hasGreetedToday:', hasGreetedToday(msg.from));
-    console.log('  userCurrentOption:', userCurrentOption.get(msg.from) || 'nenhuma');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    // ========== DEBUG LOG - FIM ==========
 
     try {
-        if (msg.type && !['chat', 'text'].includes(msg.type)) {
-            console.log('⏭️ Ignorando: tipo não suportado ->', msg.type);
-            return;
-        }
+        // CORREÇÃO: aceita 'chat' e 'text'
+        if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
         const from = msg.from;
-        if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) {
-            console.log('⏭️ Ignorando: grupo ou broadcast');
-            return;
-        }
+        if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
 
         let chat = null;
         try {
@@ -256,24 +244,18 @@ client.on('message', async msg => {
             console.warn('⚠️ Falha ao obter chat via msg.getChat():', e?.message || e);
         }
 
+        // Fora do horário
         if (foraDoHorario()) {
-            console.log('🕒 Fora do horário de atendimento');
             if (!clientesAvisadosForaDoHorario.has(from)) {
-                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!', { sendSeen: false });
+                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!');
                 clientesAvisadosForaDoHorario.add(from);
-                console.log('✅ Mensagem fora do horário enviada');
-            } else {
-                console.log('⏭️ Cliente já foi avisado sobre horário hoje');
             }
             return;
         }
 
         const raw = msg.body || '';
         const rawTrim = raw.trim();
-        if (!rawTrim) {
-            console.log('⏭️ Ignorando: mensagem vazia');
-            return;
-        }
+        if (!rawTrim) return;
 
         const text = raw
             .toLowerCase()
@@ -281,102 +263,89 @@ client.on('message', async msg => {
             .replace(/[^\w\s]/g, ' ')
             .trim();
 
-        console.log('📝 Texto normalizado:', text);
-
         const greetingsList = [
-            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'boa dia',
-            'oi', 'oii', 'ola', 'oi bom dia', 'oi boa tarde', 'boa tardr', 'oi boa noite',
+            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
+            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
             'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
-            'olá boa tarde', 'olá boa noite', 'ola', 'olaa'
+            'olá boa tarde', 'olá boa noite', 'ola','olaa'
         ];
 
         const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
-        console.log('👋 É saudação?', isGreeting);
 
         if (isGreeting) {
+            // CORREÇÃO: Apenas ignora se já foi saudado hoje, sem enviar o menu novamente
             if (hasGreetedToday(from)) {
-                console.log('⏭️ Já enviamos saudação hoje para', from);
+                console.log('Já enviamos saudação hoje para', from);
                 return;
             }
             const contact = await safeGetContact(msg);
             userCurrentOption.delete(from);
             await sendMenu(from, contact);
             markGreetedNow(from);
-            console.log('✅ Menu enviado para', from);
             return;
         }
 
         if (userCurrentOption.has(from)) {
-            console.log('📌 Usuário está em submenu:', userCurrentOption.get(from));
             if (rawTrim === '4') {
                 const contact = await safeGetContact(msg);
                 userCurrentOption.delete(from);
                 await sendMenu(from, contact);
                 markGreetedNow(from);
-                console.log('✅ Voltou ao menu principal');
                 return;
             }
-            console.log('⏭️ Ignorando (usuário em submenu, aguardando texto livre ou 4)');
             return;
         }
 
+        // --- Opções do menu ---
         if (rawTrim === '1') {
-            console.log('🔢 Opção 1 selecionada');
             userCurrentOption.set(from, '1');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.', { sendSeen: false });
+            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉', { sendSeen: false });
+            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
             try {
                 const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
                     const media = MessageMedia.fromFilePath(mediaPath);
-                    await client.sendMessage(from, media, { caption: '📋 Cardápio', sendSeen: false });
+                    await client.sendMessage(from, media, { caption: '📋 Cardápio' });
                 } else {
                     console.warn('Arquivo de mídia não encontrado:', mediaPath);
                 }
             } catch (err) {
                 console.error('Erro ao enviar mídia:', err);
             }
-            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4', { sendSeen: false });
-            console.log('✅ Opção 1 processada');
+            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4');
             return;
         }
 
         if (rawTrim === '2') {
-            console.log('🔢 Opção 2 selecionada');
             userCurrentOption.set(from, '2');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)', { sendSeen: false });
-            console.log('✅ Opção 2 processada');
+            await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
             return;
         }
 
         if (rawTrim === '3') {
-            console.log('🔢 Opção 3 selecionada');
             userCurrentOption.set(from, '3');
             await delay(1000);
             try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
-            await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4', { sendSeen: false });
-            console.log('✅ Opção 3 processada');
+            await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
             return;
         }
-
-        // Se chegou aqui, mensagem não reconhecida no menu principal
-        console.log('❓ Mensagem não reconhecida no menu principal:', rawTrim);
 
     } catch (err) {
         console.error('❌ Erro no processamento da mensagem:', err);
     }
 });
 
+// CORREÇÃO: horário consistente (5h às 23h)
 const foraDoHorario = () => {
     const agora = new Date();
     const horaUTC = agora.getUTCHours();
@@ -393,25 +362,16 @@ app.get('/', (req, res) => res.send('OK'));
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        const html = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="10">
-    <title>QR Code WhatsApp</title>
-    <style>
-        body { font-family: sans-serif; text-align: center; padding: 40px; background: #f0f0f0; }
-        img { max-width: 400px; border: 4px solid #25D366; border-radius: 12px; }
-        h1 { color: #333; }
-        p { color: #666; }
-    </style>
-</head>
-<body>
-    <h1>Escaneie este QR code para conectar o WhatsApp</h1>
-    <img src="/qr.png?t=${Date.now()}" alt="QR Code" />
-    <p>Atualiza automaticamente quando um novo QR for emitido.</p>
-</body>
-</html>`;
+        const html = '' +
+            '<html>' +
+            '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">' +
+            '<div style="text-align:center">' +
+            '<h3>Escaneie este QR code para conectar o WhatsApp</h3>' +
+            '<img src="/qr.png" style="max-width:90vw;"/>' +
+            '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>' +
+            '</div>' +
+            '</body>' +
+            '</html>';
         return res.send(html);
     } else {
         return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
