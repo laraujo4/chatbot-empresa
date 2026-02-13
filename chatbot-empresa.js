@@ -5,13 +5,12 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const fs = require('fs');
 const express = require('express');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth, Buttons, List, MessageMedia } = require('whatsapp-web.js');
 const puppeteer = require('puppeteer');
 const path = require('path');
 
 // pasta de sessão (pode ser sobrescrita por variável de ambiente)
-// IMPORTANTE: Use caminhos relativos ou garanta que a pasta exista com permissões de escrita
-const sessionPath = process.env.SESSION_PATH || path.join(__dirname, 'session_data');
+const sessionPath = process.env.SESSION_PATH || '/data/session';
 if (!fs.existsSync(sessionPath)) {
     fs.mkdirSync(sessionPath, { recursive: true });
     console.log('Criada pasta de sessão em', sessionPath);
@@ -79,12 +78,11 @@ let qrWriteTimeout = null;
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: 'mili-bot',
-        dataPath: sessionPath // Usando a mesma pasta base para organização
+        dataPath: path.join(__dirname, 'session')
     }),
     puppeteer: {
         headless: true,
-        // CORREÇÃO: Removido executablePath fixo para evitar erros em diferentes sistemas
-        // O puppeteer-core/whatsapp-web.js geralmente encontra o caminho correto ou usa o instalado
+        executablePath: process.env.CHROME_PATH || puppeteer.executablePath() || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -125,8 +123,7 @@ async function safeGetContact(msg) {
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
-// ---------- EVENTOS DO CLIENTE ----------
-
+/* serviço de leitura do qr code */
 client.on('qr', async qr => {
     try {
         console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
@@ -149,7 +146,7 @@ client.on('qr', async qr => {
                 fs.writeFileSync(outPath, buffer);
                 lastQr = qr;
                 console.log('✅ QR image salva em /public/qr.png');
-                // console.log('🔗 Abra o link do seu servidor/qr para escanear.');
+                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.'  );
             } catch (err) {
                 console.error('Erro ao gerar PNG do QR:', err);
             }
@@ -159,43 +156,23 @@ client.on('qr', async qr => {
     }
 });
 
-// CORREÇÃO: O evento 'ready' só dispara se o cliente for inicializado corretamente
 client.on('ready', () => {
     console.log('✅ WhatsApp conectado com sucesso!');
 });
 
-// Adicionado log de autenticação
-client.on('authenticated', () => {
-    console.log('🔓 Autenticado com sucesso! Aguardando sincronização (ready)...');
-});
-
 client.on('auth_failure', msg => {
-    console.error('❌ Falha de autenticação:', msg);
+    console.error('Falha de autenticação:', msg);
 });
 
 client.on('disconnected', reason => {
-    console.warn('⚠️ Cliente desconectado:', reason);
+    console.warn('Cliente desconectado:', reason);
 });
 
-// Inicialização
-console.log('Iniciando cliente WhatsApp...');
-client.initialize().catch(err => {
-    console.error('Erro ao inicializar o cliente:', err);
-});
-
-// ---------- LÓGICA DO CHATBOT ----------
+client.initialize();
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 const clientesAvisadosForaDoHorario = new Set();
 const userCurrentOption = new Map();
-
-// CORREÇÃO: horário consistente (5h às 23h)
-const foraDoHorario = () => {
-    const agora = new Date();
-    const horaUTC = agora.getUTCHours();
-    const horaBrasilia = (horaUTC - 3 + 24) % 24;
-    return (horaBrasilia < 5 || horaBrasilia >= 23);
-};
 
 function agendarLimpezaDiaria() {
     const agora = new Date();
@@ -252,8 +229,9 @@ async function sendMenu(from, contact) {
 
 // Funil principal
 client.on('message', async msg => {
+
     try {
-        // CORREÇÃO: Aceita tipos de mensagem comuns
+        // CORREÇÃO: aceita 'chat' e 'text'
         if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
         const from = msg.from;
@@ -287,7 +265,7 @@ client.on('message', async msg => {
 
         const greetingsList = [
             'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
-            'oi', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
+            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
             'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
             'olá boa tarde', 'olá boa noite', 'ola','olaa'
         ];
@@ -295,6 +273,7 @@ client.on('message', async msg => {
         const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
 
         if (isGreeting) {
+            // CORREÇÃO: Apenas ignora se já foi saudado hoje, sem enviar o menu novamente
             if (hasGreetedToday(from)) {
                 console.log('Já enviamos saudação hoje para', from);
                 return;
@@ -314,22 +293,22 @@ client.on('message', async msg => {
                 markGreetedNow(from);
                 return;
             }
-            // Se o usuário já escolheu uma opção, a lógica específica de cada opção continua aqui
-            // No seu código original, as opções 1, 2 e 3 estavam fora deste bloco, o que é aceitável se não houver sub-menus complexos.
+            return;
         }
 
         // --- Opções do menu ---
         if (rawTrim === '1') {
             userCurrentOption.set(from, '1');
             await delay(1000);
-            try { if(chat) await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
             await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
             await delay(1000);
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            await delay(1000);
             await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
-            
             try {
-                const mediaPath = path.join(__dirname, 'Cardápio Empresa.jpg');
+                const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
                     const media = MessageMedia.fromFilePath(mediaPath);
                     await client.sendMessage(from, media, { caption: '📋 Cardápio' });
@@ -346,7 +325,7 @@ client.on('message', async msg => {
         if (rawTrim === '2') {
             userCurrentOption.set(from, '2');
             await delay(1000);
-            try { if(chat) await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
             await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
             return;
@@ -355,7 +334,7 @@ client.on('message', async msg => {
         if (rawTrim === '3') {
             userCurrentOption.set(from, '3');
             await delay(1000);
-            try { if(chat) await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
             await delay(1000);
             await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
             return;
@@ -366,26 +345,33 @@ client.on('message', async msg => {
     }
 });
 
+// CORREÇÃO: horário consistente (5h às 23h)
+const foraDoHorario = () => {
+    const agora = new Date();
+    const horaUTC = agora.getUTCHours();
+    const horaBrasilia = (horaUTC - 3 + 24) % 24;
+    return (horaBrasilia < 5 || horaBrasilia >= 23);
+};
+
 // --- Express health / status ---
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.get('/', (req, res) => res.send('Chatbot Status: Online'));
+app.get('/', (req, res) => res.send('OK'));
 
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        const html = `
-            <html>
-            <head><title>WhatsApp QR Code</title></head>
-            <body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff;font-family:sans-serif;">
-            <div style="text-align:center">
-            <h3>Escaneie este QR code para conectar o WhatsApp</h3>
-            <img src="/qr.png" style="max-width:90vw; border: 10px solid white; border-radius: 10px;"/>
-            <p style="opacity:.7">O QR Code atualiza automaticamente. Recarregue se necessário.</p>
-            </div>
-            </body>
-            </html>`;
+        const html = '' +
+            '<html>' +
+            '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">' +
+            '<div style="text-align:center">' +
+            '<h3>Escaneie este QR code para conectar o WhatsApp</h3>' +
+            '<img src="/qr.png" style="max-width:90vw;"/>' +
+            '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>' +
+            '</div>' +
+            '</body>' +
+            '</html>';
         return res.send(html);
     } else {
         return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
@@ -401,9 +387,8 @@ app.get('/qr.png', (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log('🚀 Servidor HTTP rodando na porta ' + PORT));
+app.listen(PORT, '0.0.0.0', () => console.log('HTTP server rodando na porta ' + PORT));
 
-// Shutdown gracioso
 async function shutdown() {
     console.log('Shutdown iniciado — fechando client...');
     try {
