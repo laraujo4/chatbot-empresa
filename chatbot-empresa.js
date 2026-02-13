@@ -287,7 +287,7 @@ client.on('message', async msg => {
 
         const greetingsList = [
             'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
-            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
+            'oi', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
             'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
             'olá boa tarde', 'olá boa noite', 'ola','olaa'
         ];
