@@ -1,25 +1,29 @@
 'use strict';
 
 /**
- * VERSÃO COMPLETA E ESTÁVEL (MANTÉM TODOS OS LOGS DO LOVABLE)
+ * BOT WHATSAPP - PAMONHA E CIA
+ * Versão corrigida e estável para Railway
  * 
- * Este código preserva 100% da sua lógica original de logs, diagnósticos e mensagens,
- * mas injeta os "Fixes de Estabilidade" do Manus para garantir que o bot conecte.
+ * Correções aplicadas:
+ * 1. webVersionCache atualizado com URL estável
+ * 2. Bug de referência nula em sendMenu corrigido
+ * 3. Watchdog reescrito para não interferir com a inicialização
+ * 4. Express static configurado corretamente
+ * 5. Flags do Puppeteer otimizadas para Railway
+ * 6. Lógica de reconexão mais segura
  */
 
-const qrcode = require('qrcode-terminal');
-const QRCode = require('qrcode');
-const fs = require('fs');
-const express = require('express');
+const qrcode    = require('qrcode-terminal');
+const QRCode    = require('qrcode');
+const fs        = require('fs');
+const express   = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const puppeteer = require('puppeteer');
-const path = require('path');
+const path      = require('path');
 
 // ---------- CONFIG ----------
-const PORT = process.env.PORT || 8080;
-// Mudamos ligeiramente o nome da pasta de sessão para garantir uma sincronização limpa
+const PORT        = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'wwebjs_auth_session');
-const publicDir = path.join(__dirname, 'public');
+const publicDir   = path.join(__dirname, 'public');
 
 if (!fs.existsSync(sessionPath)) {
     fs.mkdirSync(sessionPath, { recursive: true });
@@ -61,32 +65,27 @@ function saveGreetingsDebounced() {
 
 function hojeEmBrasil() {
     const ms = Date.now() - (3 * 60 * 60 * 1000);
-    const d = new Date(ms);
+    const d  = new Date(ms);
     return d.toISOString().slice(0, 10);
 }
 
-function hasGreetedToday(chatId) {
-    return greetings[chatId] === hojeEmBrasil();
-}
-
-function markGreetedNow(chatId) {
-    greetings[chatId] = hojeEmBrasil();
-    saveGreetingsDebounced();
-}
+function hasGreetedToday(chatId) { return greetings[chatId] === hojeEmBrasil(); }
+function markGreetedNow(chatId)  { greetings[chatId] = hojeEmBrasil(); saveGreetingsDebounced(); }
 
 loadGreetings();
 
 // ---------- VARIÁVEIS GLOBAIS ----------
-let lastQr = null;
-let qrWriteTimeout = null;
-let readyFired = false;
-let client = null;
+let lastQr          = null;
+let qrWriteTimeout  = null;
+let readyFired      = false;
+let client          = null;
+let initializingNow = false; // NOVO: evita sobreposição de inicializações
 
 // ---------- HELPERS ----------
 async function safeGetContact(msg) {
     const from = msg && msg.from ? msg.from : 'unknown@c.us';
     try {
-        const d = msg._data || {};
+        const d         = msg._data || {};
         const maybeName = d.notifyName || d.senderName || d.pushname || d.notify || d.authorName;
         if (maybeName && typeof maybeName === 'string' && maybeName.trim()) {
             return { pushname: maybeName.trim(), id: { _serialized: from } };
@@ -94,7 +93,6 @@ async function safeGetContact(msg) {
     } catch (err) {
         console.warn('safeGetContact: falha ao ler nome de msg._data:', err);
     }
-
     try {
         const chat = await client.getChatById(from).catch(() => null);
         if (chat) {
@@ -106,30 +104,27 @@ async function safeGetContact(msg) {
     } catch (err) {
         console.warn('safeGetContact: falha ao tentar via chat:', err);
     }
-
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 const foraDoHorario = () => {
-    const agora = new Date();
-    const horaUTC = agora.getUTCHours();
-    const horaBrasilia = (horaUTC - 3 + 24) % 24;
+    const horaBrasilia = (new Date().getUTCHours() - 3 + 24) % 24;
     return (horaBrasilia < 5 || horaBrasilia >= 23);
 };
 
 const clientesAvisadosForaDoHorario = new Set();
-const userCurrentOption = new Map();
+const userCurrentOption             = new Map();
 
 function agendarLimpezaDiaria() {
-    const agora = new Date();
-    const msOffset = 3 * 60 * 60 * 1000;
-    const agoraBrasil = new Date(agora.getTime() - msOffset);
+    const agora                  = new Date();
+    const msOffset               = 3 * 60 * 60 * 1000;
+    const agoraBrasil            = new Date(agora.getTime() - msOffset);
     const proximaMeiaNoiteBrasil = new Date(agoraBrasil);
     proximaMeiaNoiteBrasil.setHours(24, 0, 0, 0);
     const proximaExecucaoUTC = new Date(proximaMeiaNoiteBrasil.getTime() + msOffset);
-    const tempoAteMeiaNoite = proximaExecucaoUTC - agora;
+    const tempoAteMeiaNoite  = proximaExecucaoUTC - agora;
 
     console.log('🕛 Limpeza agendada para (UTC):', proximaExecucaoUTC.toISOString());
 
@@ -144,7 +139,28 @@ function agendarLimpezaDiaria() {
 }
 agendarLimpezaDiaria();
 
-// ---------- CREATE CLIENT (Preserva logs + Fixes de Estabilidade) ----------
+// ---------- sendMenu ----------
+// CORREÇÃO: agora recebe o client como parâmetro para evitar referência nula
+async function sendMenu(c, from, contact) {
+    try {
+        const firstName = (contact.pushname || 'amigo').split(' ')[0];
+        const menu = [
+            'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
+            'Sou seu assistente virtual!',
+            '',
+            'Por favor, escolha uma opção *(digite apenas o número)*:',
+            '',
+            '1️⃣ Fazer um pedido',
+            '2️⃣ Encomendar milho',
+            '3️⃣ Falar com um atendente'
+        ].join('\n');
+        await c.sendMessage(from, menu, { sendSeen: false });
+    } catch (err) {
+        console.error('Erro em sendMenu:', err);
+    }
+}
+
+// ---------- CREATE CLIENT ----------
 function createClient() {
     const c = new Client({
         authStrategy: new LocalAuth({
@@ -152,7 +168,7 @@ function createClient() {
             dataPath: sessionPath
         }),
         puppeteer: {
-            headless: true, // Forçado para estabilidade no servidor
+            headless: true,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -160,18 +176,20 @@ function createClient() {
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--no-zygote',
+                '--single-process',      // NOVO: essencial para Railway (container com 1 CPU)
                 '--disable-gpu',
-                '--remote-debugging-port=9222' // Fix Manus
+                '--disable-extensions',  // NOVO: reduz uso de memória
+                '--disable-software-rasterizer' // NOVO: evita crash em ambientes sem GPU
             ]
         },
-        // FIX CRÍTICO MANUS: Força versão estável para evitar loop de 'authenticated'
+        // CORREÇÃO PRINCIPAL: URL estável e atualizada para evitar loop de QR/authenticated
         webVersionCache: {
             type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1017424380-alpha.html',
         }
     });
 
-    // ----- EVENTOS (Mantendo todos os seus logs informativos) -----
+    // ----- EVENTOS -----
 
     c.on('qr', async qr => {
         try {
@@ -207,62 +225,72 @@ function createClient() {
             console.warn('Erro ao listar sessionPath:', e);
         }
 
-        // Watchdog original do Lovable
+        // Watchdog informativo — agora com 90s para dar tempo ao Railway
         setTimeout(async () => {
             if (!readyFired) {
-                console.warn('⏳ Após 60s de "authenticated", o evento "ready" ainda NÃO ocorreu. Vamos dumpar info útil.');
+                console.warn('⏳ Após 90s de "authenticated", o evento "ready" ainda NÃO ocorreu.');
                 try {
                     const filesNow = fs.readdirSync(sessionPath);
                     console.log('📁 [watchdog] sessionPath agora:', filesNow);
                 } catch (e) { console.warn('Erro sessionPath watchdog:', e); }
-
                 try {
-                    const pup = c.pupBrowser || c.browser;
+                    const pup   = c.pupBrowser || c.browser;
                     if (pup) {
                         const pages = await pup.pages();
                         console.log('🌐 [watchdog] número de pages no browser:', pages.length);
                         for (let i = 0; i < pages.length; i++) {
-                            try {
-                                console.log(`Page[${i}] URL:`, pages[i].url());
-                            } catch (err) {}
+                            try { console.log(`Page[${i}] URL:`, pages[i].url()); } catch (err) {}
                         }
                     }
                 } catch (err) {}
             }
-        }, 60000);
+        }, 90000); // CORREÇÃO: era 60s, agora 90s
     });
 
     c.on('auth_failure', msg => {
-        console.error('❌ [EVENT] auth_failure — falha durante autenticação:', msg);
+        console.error('❌ [EVENT] auth_failure:', msg);
+        // Limpa a sessão corrompida para forçar novo QR no próximo start
+        try {
+            const sessionDir = path.join(sessionPath, 'session-mili-bot');
+            if (fs.existsSync(sessionDir)) {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+                console.log('🗑️ Sessão corrompida removida. Reinicie o bot para gerar novo QR.');
+            }
+        } catch (e) {
+            console.warn('Não foi possível limpar sessão corrompida:', e);
+        }
     });
 
     c.on('ready', () => {
-        readyFired = true;
-        console.log('✅ [EVENT] ready — WhatsApp conectado com sucesso! Bot pronto para receber mensagens.');
+        readyFired      = true;
+        initializingNow = false;
+        console.log('✅ [EVENT] ready — WhatsApp conectado! Bot pronto para receber mensagens.');
     });
 
     c.on('disconnected', reason => {
         readyFired = false;
         console.warn('⚠️ [EVENT] disconnected — motivo:', reason);
+        // Agenda reconexão com delay para não sobrecarregar o Railway
+        setTimeout(() => ensureReadyOrRestart(), 10000);
     });
 
-    c.on('change_state', state => console.log('🔄 [EVENT] change_state ->', state));
-    c.on('loading_screen', (percent, message) => console.log(`📊 [EVENT] loading_screen -> ${percent}%: ${message}`));
-    c.on('remote_session_saved', () => console.log('💾 [EVENT] remote_session_saved (sessão remota salva)'));
+    c.on('change_state',    state              => console.log('🔄 [EVENT] change_state ->', state));
+    c.on('loading_screen',  (percent, message) => console.log(`📊 [EVENT] loading_screen -> ${percent}%: ${message}`));
+    c.on('remote_session_saved', ()            => console.log('💾 [EVENT] remote_session_saved'));
 
     c.on('message', async msg => {
         try {
-            // ---- DEBUG LOG ORIGINAL ----
             console.log('📩 [MSG RECEBIDA]', JSON.stringify({
-                from: msg.from,
-                type: msg.type,
-                body: (msg.body || '').substring(0, 50),
-                fromMe: msg.fromMe,
-                isStatus: msg.isStatus,
+                from:      msg.from,
+                type:      msg.type,
+                body:      (msg.body || '').substring(0, 50),
+                fromMe:    msg.fromMe,
+                isStatus:  msg.isStatus,
                 timestamp: new Date().toISOString()
             }));
 
-            if (msg.fromMe || (msg.type && !['chat', 'text'].includes(msg.type))) return;
+            if (msg.fromMe) return;
+            if (msg.type && !['chat', 'text'].includes(msg.type)) return;
 
             const from = msg.from;
             if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
@@ -278,30 +306,27 @@ function createClient() {
                 return;
             }
 
-            const raw = msg.body || '';
+            const raw     = msg.body || '';
             const rawTrim = raw.trim();
             if (!rawTrim) return;
 
-            const text = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').trim();
+            const text         = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').trim();
             const greetingsList = ['menu', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'];
 
             if (greetingsList.some(g => text.includes(g))) {
-                if (hasGreetedToday(from)) {
-                    const contact = await safeGetContact(msg);
-                    await sendMenu(from, contact);
-                    return;
-                }
                 const contact = await safeGetContact(msg);
                 userCurrentOption.delete(from);
-                await sendMenu(from, contact);
+                // CORREÇÃO: passa `c` para sendMenu em vez de usar a variável global `client`
+                await sendMenu(c, from, contact);
                 markGreetedNow(from);
                 return;
             }
 
+            // Opção 4: voltar ao menu
             if (userCurrentOption.has(from) && rawTrim === '4') {
                 const contact = await safeGetContact(msg);
                 userCurrentOption.delete(from);
-                await sendMenu(from, contact);
+                await sendMenu(c, from, contact);
                 markGreetedNow(from);
                 return;
             }
@@ -313,79 +338,124 @@ function createClient() {
                 if (chat) await chat.sendStateTyping();
                 await delay(1000);
                 await c.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n\nEnvie seu *endereço completo* e seu pedido.', { sendSeen: false });
-                
+
                 const mediaPath = path.join(__dirname, 'Cardápio Empresa.jpg');
                 if (fs.existsSync(mediaPath)) {
                     const media = MessageMedia.fromFilePath(mediaPath);
                     await c.sendMessage(from, media, { caption: '📋 Cardápio', sendSeen: false });
+                } else {
+                    console.warn('⚠️ Arquivo "Cardápio Empresa.jpg" não encontrado. Pulando envio de imagem.');
                 }
                 await c.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4', { sendSeen: false });
+
             } else if (rawTrim === '2') {
                 userCurrentOption.set(from, '2');
                 await c.sendMessage(from, '🌽 *Encomenda de Milho*\nSaco Grande: R$ 90,00.\nInforme a quantidade e endereço.\n\nDigite 4 para voltar.', { sendSeen: false });
+
             } else if (rawTrim === '3') {
                 userCurrentOption.set(from, '3');
                 await c.sendMessage(from, '👤 Um atendente já vai falar com você! Aguarde um instante.\n\nDigite 4 para voltar.', { sendSeen: false });
             }
 
-        } catch (err) { console.error('❌ Erro no processamento da mensagem:', err); }
+        } catch (err) {
+            console.error('❌ Erro no processamento da mensagem:', err);
+        }
     });
 
     return c;
 }
 
-// ---------- sendMenu ----------
-async function sendMenu(from, contact) {
+// ---------- WATCHDOG REESCRITO ----------
+// CORREÇÃO: intervalo aumentado para 120s e proteção contra sobreposição de inicializações
+let reconnecting = false;
+
+async function ensureReadyOrRestart() {
+    if (readyFired || reconnecting || initializingNow) return;
+    reconnecting = true;
+    console.warn('⚠️ Watchdog: client não está pronto. Reinicializando em 5s...');
     try {
-        const firstName = (contact.pushname || 'amigo').split(' ')[0];
-        const menu = [
-            'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
-            'Sou seu assistente virtual!',
-            '',
-            'Por favor, escolha uma opção *(digite apenas o número)*:',
-            '',
-            '1️⃣ Fazer um pedido',
-            '2️⃣ Encomendar milho',
-            '3️⃣ Falar com um atendente'
-        ].join('\n');
-        await client.sendMessage(from, menu, { sendSeen: false });
-    } catch (err) { console.error('Erro em sendMenu:', err); }
+        await delay(5000);
+        try { await client.destroy(); } catch (e) { console.warn('Destroy falhou (ignorado):', e?.message); }
+        await delay(2000);
+        client = createClient();
+        initializingNow = true;
+        await client.initialize();
+    } catch (err) {
+        console.error('Erro no watchdog ao reinicializar:', err);
+        initializingNow = false;
+    } finally {
+        reconnecting = false;
+    }
 }
 
-// ---------- WATCHDOG LIGHT ----------
-let reconnecting = false;
-async function ensureReadyOrRestart() {
-    if (readyFired || reconnecting) return;
-    reconnecting = true;
-    try {
-        console.warn('⚠️ Watchdog: reinicializando client em 3s...');
-        await delay(3000);
-        try { await client.destroy(); } catch (e) {}
-        client = createClient();
-        await client.initialize();
-    } catch (err) { console.error('Erro watchdog:', err); }
-    finally { reconnecting = false; }
-}
-setInterval(() => { if (!readyFired) ensureReadyOrRestart(); }, 45000);
+// CORREÇÃO: era 45s — muito curto para o Railway. Agora 120s.
+setInterval(() => {
+    if (!readyFired && !initializingNow) ensureReadyOrRestart();
+}, 120000);
 
 // ---------- INICIALIZAÇÃO ----------
 client = createClient();
-client.initialize().catch(err => console.error('Erro inicialização:', err));
+initializingNow = true;
+client.initialize().catch(err => {
+    console.error('Erro na inicialização:', err);
+    initializingNow = false;
+});
 
 // ---------- EXPRESS ----------
 const app = express();
-app.get('/', (req, res) => res.send(readyFired ? 'WhatsApp Conectado' : 'WhatsApp Inicializando'));
+
+// CORREÇÃO: servir pasta public como static (necessário para /qr.png funcionar corretamente)
+app.use(express.static(publicDir));
+
+app.get('/', (req, res) => {
+    res.send(readyFired ? '✅ WhatsApp Conectado' : '⏳ WhatsApp Inicializando... Acesse /qr para escanear o QR Code');
+});
+
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        res.send(`<html><head><meta http-equiv="refresh" content="10"></head><body style="background:#111;color:#fff;text-align:center;padding:50px;"><img src="/qr.png?t=${Date.now()}" style="border:10px solid #fff;max-width:300px;"/></body></html>`);
-    } else res.send('Gerando QR...');
+        res.send(`
+            <html>
+            <head>
+                <meta http-equiv="refresh" content="10">
+                <title>QR Code - Pamonha e Cia Bot</title>
+            </head>
+            <body style="background:#111;color:#fff;text-align:center;padding:50px;font-family:sans-serif;">
+                <h2>📱 Escaneie o QR Code no WhatsApp</h2>
+                <p style="color:#aaa;">A página atualiza automaticamente a cada 10 segundos</p>
+                <img src="/qr.png?t=${Date.now()}" style="border:10px solid #fff;max-width:300px;border-radius:8px;"/>
+                <p style="color:#aaa;font-size:12px;">Se o QR sumir, o bot conectou com sucesso!</p>
+            </body>
+            </html>
+        `);
+    } else {
+        res.send(`
+            <html>
+            <head><meta http-equiv="refresh" content="5"><title>Aguardando QR...</title></head>
+            <body style="background:#111;color:#fff;text-align:center;padding:50px;font-family:sans-serif;">
+                <h2>⏳ Gerando QR Code...</h2>
+                <p>Aguarde alguns segundos e a página irá atualizar automaticamente.</p>
+            </body>
+            </html>
+        `);
+    }
 });
-app.get('/qr.png', (req, res) => res.sendFile(path.join(publicDir, 'qr.png')));
+
 app.listen(PORT, '0.0.0.0', () => console.log('🚀 Servidor HTTP na porta ' + PORT));
 
-// Shutdown
+// ---------- SHUTDOWN GRACIOSO ----------
 process.on('SIGINT', async () => {
-    if (client) await client.destroy();
+    console.log('\n🛑 Encerrando bot...');
+    if (client) {
+        try { await client.destroy(); } catch (e) {}
+    }
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    console.log('\n🛑 SIGTERM recebido. Encerrando bot...');
+    if (client) {
+        try { await client.destroy(); } catch (e) {}
+    }
     process.exit(0);
 });
