@@ -1,180 +1,216 @@
 'use strict';
 
-const qrcode  = require('qrcode-terminal');
-const QRCode  = require('qrcode');
-const fs      = require('fs');
+// leitor de qr code
+const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
+const fs = require('fs');
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const path    = require('path');
+const puppeteer = require('puppeteer');
+const path = require('path');
 
-// ---------- CONFIG ----------
-const PORT        = process.env.PORT || 8080;
-const sessionPath = path.join(__dirname, 'wwebjs_auth_session');
-const publicDir   = path.join(__dirname, 'public');
-
-if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
-if (!fs.existsSync(publicDir))   { fs.mkdirSync(publicDir,   { recursive: true }); }
-
-// ✅ CORREÇÃO 1: RESET_SESSION agora vem DEPOIS de sessionPath ser definido
-if (process.env.RESET_SESSION === 'true') {
-    const sessionDir = path.join(sessionPath, 'session-mili-bot');
-    if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log('🗑️ Sessão deletada via variável de ambiente! Reiniciando sem sessão...');
-    } else {
-        console.log('ℹ️ RESET_SESSION=true mas pasta de sessão não encontrada (já estava limpa).');
-    }
+// pasta de sessão (pode ser sobrescrita por variável de ambiente)
+const sessionPath = process.env.SESSION_PATH || '/data/session';
+if (!fs.existsSync(sessionPath)) {
+    fs.mkdirSync(sessionPath, { recursive: true });
+    console.log('Criada pasta de sessão em', sessionPath);
 }
 
-// ---------- PERSISTÊNCIA SAUDAÇÕES ----------
+// ---- controle de saudações diárias (persistente) ----
 const greetingsFile = path.join(sessionPath, 'greetings.json');
-let greetings = {};
+let greetings = {}; // { '<chatId>': 'YYYY-MM-DD', ... }
 let greetingsSaveTimeout = null;
 
 function loadGreetings() {
     try {
         if (fs.existsSync(greetingsFile)) {
-            greetings = JSON.parse(fs.readFileSync(greetingsFile, 'utf8') || '{}');
+            const raw = fs.readFileSync(greetingsFile, 'utf8');
+            greetings = JSON.parse(raw || '{}');
             console.log('✅ greetings carregado:', Object.keys(greetings).length, 'registros');
         }
-    } catch (e) { console.warn('Não foi possível carregar greetings.json:', e); greetings = {}; }
+    } catch (e) {
+        console.warn('Não foi possível carregar greetings.json:', e);
+        greetings = {};
+    }
 }
 
 function saveGreetingsDebounced() {
     if (greetingsSaveTimeout) clearTimeout(greetingsSaveTimeout);
     greetingsSaveTimeout = setTimeout(() => {
-        try { fs.writeFileSync(greetingsFile, JSON.stringify(greetings, null, 2), 'utf8'); }
-        catch (e) { console.error('Erro ao salvar greetings.json:', e); }
+        try {
+            fs.writeFileSync(greetingsFile, JSON.stringify(greetings, null, 2), 'utf8');
+        } catch (e) {
+            console.error('Erro ao salvar greetings.json:', e);
+        }
     }, 500);
 }
 
+// retorna a data atual no fuso de Brasilia (YYYY-MM-DD)
 function hojeEmBrasil() {
-    return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const ms = Date.now() - (3 * 60 * 60 * 1000);
+    const d = new Date(ms);
+    return d.toISOString().slice(0, 10);
 }
-function hasGreetedToday(chatId) { return greetings[chatId] === hojeEmBrasil(); }
-function markGreetedNow(chatId)  { greetings[chatId] = hojeEmBrasil(); saveGreetingsDebounced(); }
 
+function hasGreetedToday(chatId) {
+    return greetings[chatId] === hojeEmBrasil();
+}
+
+function markGreetedNow(chatId) {
+    greetings[chatId] = hojeEmBrasil();
+    saveGreetingsDebounced();
+}
+
+// carregar na inicialização
 loadGreetings();
 
-// ---------- VARIÁVEIS GLOBAIS ----------
-let lastQr          = null;
-let qrWriteTimeout  = null;
-let readyFired      = false;
-let client          = null;
-let keepAliveTimer  = null;
+// pasta pública para servir a imagem do QR
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+    console.log('Criada pasta pública em', publicDir);
+}
 
-// ✅ CORREÇÃO 2: Lock único para evitar múltiplas instâncias simultâneas
-let lifecycleLock = false;
+// variável para evitar geração excessiva (debounce)
+let lastQr = null;
+let qrWriteTimeout = null;
 
-// ---------- HELPERS ----------
+const client = new Client({
+    authStrategy: new LocalAuth({
+        clientId: 'mili-bot',
+        dataPath: path.join(__dirname, 'session')
+    }),
+    puppeteer: {
+        headless: true,
+        executablePath: process.env.CHROME_PATH || puppeteer.executablePath() || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ]
+    }
+});
+
+// ---------- wrappers seguros melhorados para obter contato -------------
 async function safeGetContact(msg) {
-    const from = msg?.from ?? 'unknown@c.us';
+    const from = msg && msg.from ? msg.from : 'unknown@c.us';
     try {
-        const d         = msg._data || {};
+        const d = msg._data || {};
         const maybeName = d.notifyName || d.senderName || d.pushname || d.notify || d.authorName;
-        if (maybeName && typeof maybeName === 'string' && maybeName.trim())
+        if (maybeName && typeof maybeName === 'string' && maybeName.trim()) {
             return { pushname: maybeName.trim(), id: { _serialized: from } };
-    } catch (e) { console.warn('safeGetContact _data falhou:', e); }
+        }
+    } catch (err) {
+        console.warn('safeGetContact: falha ao ler nome de msg._data:', err);
+    }
 
     try {
         const chat = await client.getChatById(from).catch(() => null);
         if (chat) {
-            const n = chat.formattedTitle || chat.name || chat.contact?.pushname || chat.contact?.name;
-            if (n) return { pushname: n.trim(), id: { _serialized: from } };
+            const chatName = chat.formattedTitle || chat.name || (chat.contact && (chat.contact.pushname || chat.contact.name));
+            if (chatName && typeof chatName === 'string') {
+                return { pushname: chatName.trim(), id: { _serialized: from } };
+            }
         }
-    } catch (e) { console.warn('safeGetContact getChatById falhou:', e); }
+    } catch (err) {
+        console.warn('safeGetContact: falha ao tentar via chat:', err);
+    }
 
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
+/* serviço de leitura do qr code */
+client.on('qr', async qr => {
+    try {
+        console.log('🟨 Novo QR recebido — gerando imagem em /qr ...');
+        try {
+            qrcode.generate(qr, { small: true });
+        } catch (err) {
+            console.error('Erro ao gerar QR no terminal com qrcode-terminal:', err);
+        }
+
+        if (qrWriteTimeout) clearTimeout(qrWriteTimeout);
+        qrWriteTimeout = setTimeout(async () => {
+            try {
+                if (lastQr && lastQr === qr) {
+                    console.log('QR idêntico ao anterior — pulando regravação.');
+                    return;
+                }
+                const opts = { type: 'png', width: 800, margin: 2, errorCorrectionLevel: 'M' };
+                const buffer = await QRCode.toBuffer(qr, opts);
+                const outPath = path.join(publicDir, 'qr.png');
+                fs.writeFileSync(outPath, buffer);
+                lastQr = qr;
+                console.log('✅ QR image salva em /public/qr.png');
+                console.log('🔗 Abra https://chatbot-empresa-production-30a4.up.railway.app/qr para escanear.'  );
+            } catch (err) {
+                console.error('Erro ao gerar PNG do QR:', err);
+            }
+        }, 300);
+    } catch (err) {
+        console.error('Erro no handler de qr:', err);
+    }
+});
+
+client.on('ready', () => {
+    console.log('✅ WhatsApp conectado com sucesso!');
+});
+
+client.on('auth_failure', msg => {
+    console.error('Falha de autenticação:', msg);
+});
+
+client.on('disconnected', reason => {
+    console.warn('Cliente desconectado:', reason);
+});
+
+client.initialize();
+
 const delay = ms => new Promise(res => setTimeout(res, ms));
-
-const withTimeout = (promise, ms, label) =>
-    Promise.race([
-        promise,
-        new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`Timeout (${ms}ms): ${label}`)), ms)
-        )
-    ]);
-
-const foraDoHorario = () => {
-    const h = (new Date().getUTCHours() - 3 + 24) % 24;
-    return h < 5 || h >= 23;
-};
-
 const clientesAvisadosForaDoHorario = new Set();
-const userCurrentOption             = new Map();
+const userCurrentOption = new Map();
 
 function agendarLimpezaDiaria() {
-    const agora   = new Date();
-    const offset  = 3 * 60 * 60 * 1000;
-    const brasil  = new Date(agora.getTime() - offset);
-    const proxima = new Date(brasil); proxima.setHours(24, 0, 0, 0);
-    const ms      = (proxima.getTime() + offset) - agora.getTime();
-    console.log('🕛 Limpeza diária agendada para daqui', Math.round(ms / 60000), 'minutos');
+    const agora = new Date();
+    const msOffset = 3 * 60 * 60 * 1000;
+    const agoraBrasil = new Date(agora.getTime() - msOffset);
+    const proximaMeiaNoiteBrasil = new Date(agoraBrasil);
+    proximaMeiaNoiteBrasil.setHours(24, 0, 0, 0);
+    const proximaExecucaoUTC = new Date(proximaMeiaNoiteBrasil.getTime() + msOffset);
+    const tempoAteMeiaNoite = proximaExecucaoUTC - agora;
+
+    console.log('🕛 Limpeza agendada para (hora local servidor):', proximaExecucaoUTC.toISOString());
+
     setTimeout(() => {
         clientesAvisadosForaDoHorario.clear();
-        console.log('🧹 Lista fora do horário limpa!');
+        console.log('🧹 Lista de clientes fora do horário limpa!');
         setInterval(() => {
             clientesAvisadosForaDoHorario.clear();
-            console.log('🧹 Lista fora do horário limpa (rotina diária)');
+            console.log('🧹 Lista de clientes fora do horário limpa automaticamente (diária)');
         }, 24 * 60 * 60 * 1000);
-    }, ms);
+    }, tempoAteMeiaNoite);
 }
 agendarLimpezaDiaria();
 
-// ---------- DESTROY ROBUSTO ----------
-async function destroyClient(c) {
-    if (!c) return;
+async function sendMenu(from, contact) {
     try {
-        const browser = c.pupBrowser || c.browser || c.pupPage?.browser?.();
-        if (browser) {
-            console.log('🔫 Fechando browser diretamente...');
-            await withTimeout(browser.close(), 5000, 'browser.close');
-            console.log('✅ Browser fechado.');
-        }
-    } catch (e) {
-        console.warn('⚠️ browser.close() falhou (ignorado):', e?.message);
-    }
-    try {
-        await withTimeout(c.destroy(), 8000, 'client.destroy');
-        console.log('✅ client.destroy() concluído.');
-    } catch (e) {
-        console.warn('⚠️ client.destroy() ignorado:', e?.message);
-    }
-    await delay(2000);
-}
-
-// ---------- KEEP-ALIVE ----------
-function startKeepAlive(c) {
-    stopKeepAlive();
-    keepAliveTimer = setInterval(async () => {
-        if (!readyFired) return;
+        const name = (contact && contact.pushname) ? contact.pushname : 'amigo';
+        const firstName = name.split(' ')[0];
+        await delay(1000);
+        let chat = null;
         try {
-            const state = await c.getState();
-            console.log('💓 keepAlive — estado:', state);
-            if (state !== 'CONNECTED') {
-                console.warn('⚠️ keepAlive detectou estado não-CONNECTED:', state, '— reconectando');
-                readyFired = false;
-                scheduleRestart(10000);
-            }
+            chat = await client.getChatById(from);
         } catch (e) {
-            console.warn('⚠️ keepAlive falhou — reconectando:', e?.message);
-            readyFired = false;
-            scheduleRestart(10000);
+            console.warn('sendMenu: não foi possível obter chat via client.getChatById():', e && e.message ? e.message : e);
         }
-    }, 30 * 1000);
-    console.log('💓 keepAlive iniciado (intervalo: 30s)');
-}
-
-function stopKeepAlive() {
-    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
-}
-
-// ---------- sendMenu ----------
-async function sendMenu(c, from, contact) {
-    try {
-        const firstName = (contact.pushname || 'amigo').split(' ')[0];
+        if (chat && chat.sendStateTyping) {
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+        }
+        await delay(1000);
         const menu = [
             'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
             'Sou seu assistente virtual!',
@@ -185,301 +221,191 @@ async function sendMenu(c, from, contact) {
             '2️⃣ Encomendar milho',
             '3️⃣ Falar com um atendente'
         ].join('\n');
-        await c.sendMessage(from, menu, { sendSeen: false });
-    } catch (err) { console.error('Erro em sendMenu:', err); }
+        await client.sendMessage(from, menu);
+    } catch (err) {
+        console.error('Erro em sendMenu:', err);
+    }
 }
 
-// ---------- CREATE CLIENT ----------
-function createClient() {
-    const c = new Client({
-        authStrategy: new LocalAuth({ clientId: 'mili-bot', dataPath: sessionPath }),
-        puppeteer: {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-gpu',
-                '--disable-extensions',
-                '--disable-software-rasterizer'
-            ]
-        },
-        // ✅ CORREÇÃO 3: webVersionCache removido — deixa o whatsapp-web.js
-        // escolher a versão compatível automaticamente. A versão fixada
-        // estava obsoleta e causava travamento silencioso após "authenticated".
-    });
+// Funil principal
+client.on('message', async msg => {
 
-    c.on('qr', async qr => {
-        console.log('🟨 [EVENT] qr recebido — escaneie em /qr');
-        try { qrcode.generate(qr, { small: true }); } catch (e) {}
-        if (qrWriteTimeout) clearTimeout(qrWriteTimeout);
-        qrWriteTimeout = setTimeout(async () => {
+    try {
+        // CORREÇÃO: aceita 'chat' e 'text'
+        if (msg.type && !['chat', 'text'].includes(msg.type)) return;
+
+        const from = msg.from;
+        if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
+
+        let chat = null;
+        try {
+            chat = await msg.getChat();
+        } catch (e) {
+            console.warn('⚠️ Falha ao obter chat via msg.getChat():', e?.message || e);
+        }
+
+        // Fora do horário
+        if (foraDoHorario()) {
+            if (!clientesAvisadosForaDoHorario.has(from)) {
+                await client.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!');
+                clientesAvisadosForaDoHorario.add(from);
+            }
+            return;
+        }
+
+        const raw = msg.body || '';
+        const rawTrim = raw.trim();
+        if (!rawTrim) return;
+
+        const text = raw
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\w\s]/g, ' ')
+            .trim();
+
+        const greetingsList = [
+            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia','boa dia',
+            'oi','oii', 'ola', 'oi bom dia', 'oi boa tarde','boa tardr', 'oi boa noite',
+            'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'olá', 'olá bom dia',
+            'olá boa tarde', 'olá boa noite', 'ola','olaa'
+        ];
+
+        const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
+
+        if (isGreeting) {
+            // CORREÇÃO: Apenas ignora se já foi saudado hoje, sem enviar o menu novamente
+            if (hasGreetedToday(from)) {
+                console.log('Já enviamos saudação hoje para', from);
+                return;
+            }
+            const contact = await safeGetContact(msg);
+            userCurrentOption.delete(from);
+            await sendMenu(from, contact);
+            markGreetedNow(from);
+            return;
+        }
+
+        if (userCurrentOption.has(from)) {
+            if (rawTrim === '4') {
+                const contact = await safeGetContact(msg);
+                userCurrentOption.delete(from);
+                await sendMenu(from, contact);
+                markGreetedNow(from);
+                return;
+            }
+            return;
+        }
+
+        // --- Opções do menu ---
+        if (rawTrim === '1') {
+            userCurrentOption.set(from, '1');
+            await delay(1000);
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            await delay(1000);
+            await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
+            await delay(1000);
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            await delay(1000);
+            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
             try {
-                if (lastQr === qr) return;
-                const buf = await QRCode.toBuffer(qr, { type: 'png', width: 800, margin: 2 });
-                fs.writeFileSync(path.join(publicDir, 'qr.png'), buf);
-                lastQr = qr;
-                console.log('✅ QR salvo em /public/qr.png');
-            } catch (e) { console.error('Erro ao salvar QR PNG:', e); }
-        }, 300);
-    });
-
-    c.on('authenticated', () => {
-        console.log('🔓 [EVENT] authenticated — aguardando ready...');
-        // Avisa se ready não disparar em 60s
-        setTimeout(() => {
-            if (!readyFired) {
-                console.error('🚨 ready não disparou 60s após authenticated!');
-                console.error('🚨 Provável causa: versão do WA Web incompatível ou sessão corrompida.');
-                console.error('🚨 Acesse /reset-session e reinicie o serviço.');
-            }
-        }, 60000);
-    });
-
-    c.on('auth_failure', msg => {
-        console.error('❌ [EVENT] auth_failure:', msg);
-        try {
-            const sessionDir = path.join(sessionPath, 'session-mili-bot');
-            if (fs.existsSync(sessionDir)) {
-                fs.rmSync(sessionDir, { recursive: true, force: true });
-                console.log('🗑️ Sessão corrompida removida automaticamente.');
-            }
-        } catch (e) { console.warn('Não foi possível limpar sessão:', e); }
-        scheduleRestart(5000);
-    });
-
-    c.on('ready', () => {
-        readyFired    = true;
-        lifecycleLock = false;
-        console.log('✅ [EVENT] ready — Bot pronto para receber mensagens!');
-        startKeepAlive(c);
-    });
-
-    c.on('disconnected', reason => {
-        readyFired = false;
-        stopKeepAlive();
-        console.warn('⚠️ [EVENT] disconnected:', reason);
-        scheduleRestart(15000);
-    });
-
-    c.on('change_state',         s      => console.log('🔄 [EVENT] change_state ->', s));
-    c.on('loading_screen',       (p, m) => console.log(`📊 [EVENT] loading_screen -> ${p}%: ${m}`));
-    c.on('remote_session_saved', ()     => console.log('💾 [EVENT] remote_session_saved'));
-
-    c.on('message', async msg => {
-        try {
-            console.log('📩 [MSG]', JSON.stringify({
-                from:      msg.from,
-                type:      msg.type,
-                body:      (msg.body || '').substring(0, 50),
-                fromMe:    msg.fromMe,
-                timestamp: new Date().toISOString()
-            }));
-
-            if (msg.fromMe) return;
-            const tiposDescartados = ['image', 'video', 'audio', 'ptt', 'sticker', 'document', 'location', 'vcard', 'revoked'];
-            if (msg.type && tiposDescartados.includes(msg.type)) return;
-
-            const from = msg.from;
-            if (!from || from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
-
-            let chat = null;
-            try { chat = await msg.getChat(); } catch (e) { console.warn('Falha ao obter chat:', e?.message); }
-
-            if (foraDoHorario()) {
-                if (!clientesAvisadosForaDoHorario.has(from)) {
-                    await c.sendMessage(from, '🕒 Não estamos atendendo no momento. Deixe sua mensagem e responderemos em breve!', { sendSeen: false });
-                    clientesAvisadosForaDoHorario.add(from);
-                }
-                return;
-            }
-
-            const raw     = msg.body || '';
-            const rawTrim = raw.trim();
-            if (!rawTrim) return;
-
-            const text = raw.toLowerCase()
-                .normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '')
-                .replace(/[^\w\s]/g, ' ')
-                .trim();
-
-            const greetingsList = ['menu', 'oi', 'ola', 'bom dia', 'boa tarde', 'boa noite'];
-
-            if (greetingsList.some(g => text.includes(g))) {
-                const contact = await safeGetContact(msg);
-                userCurrentOption.delete(from);
-                await sendMenu(c, from, contact);
-                markGreetedNow(from);
-                return;
-            }
-
-            if (userCurrentOption.has(from) && rawTrim === '4') {
-                const contact = await safeGetContact(msg);
-                userCurrentOption.delete(from);
-                await sendMenu(c, from, contact);
-                markGreetedNow(from);
-                return;
-            }
-
-            if (rawTrim === '1') {
-                userCurrentOption.set(from, '1');
-                await delay(1000);
-                if (chat) await chat.sendStateTyping();
-                await delay(1000);
-                await c.sendMessage(from,
-                    '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá!\n\nEnvie seu *endereço completo* e seu pedido.',
-                    { sendSeen: false });
-
-                const mediaPath = path.join(__dirname, 'Cardápio Empresa.jpg');
+                const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
                     const media = MessageMedia.fromFilePath(mediaPath);
-                    await c.sendMessage(from, media, { caption: '📋 Cardápio', sendSeen: false });
+                    await client.sendMessage(from, media, { caption: '📋 Cardápio' });
                 } else {
-                    console.warn('⚠️ "Cardápio Empresa.jpg" não encontrado — pulando imagem.');
+                    console.warn('Arquivo de mídia não encontrado:', mediaPath);
                 }
-                await c.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4', { sendSeen: false });
-
-            } else if (rawTrim === '2') {
-                userCurrentOption.set(from, '2');
-                await c.sendMessage(from,
-                    '🌽 *Encomenda de Milho*\nSaco Grande: R$ 90,00.\nInforme a quantidade e endereço.\n\nDigite 4 para voltar.',
-                    { sendSeen: false });
-
-            } else if (rawTrim === '3') {
-                userCurrentOption.set(from, '3');
-                await c.sendMessage(from,
-                    '👤 Um atendente já vai falar com você! Aguarde um instante.\n\nDigite 4 para voltar.',
-                    { sendSeen: false });
+            } catch (err) {
+                console.error('Erro ao enviar mídia:', err);
             }
+            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4');
+            return;
+        }
 
-        } catch (err) { console.error('❌ Erro ao processar mensagem:', err); }
-    });
+        if (rawTrim === '2') {
+            userCurrentOption.set(from, '2');
+            await delay(1000);
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            await delay(1000);
+            await client.sendMessage(from, '🌽 Se você já é cliente, é só falar a quantidade de *sacos de milho* que você deseja encomendar.\n\nSe esse for o seu primeiro pedido, por favor, informe:\n📍 Endereço (rua, número, bairro e cidade)\n💵 *O valor do saco de milho é de R$ 90,00 (tamanho grande)*\n\n(Se quiser voltar ao menu inicial, digite 4)');
+            return;
+        }
 
-    return c;
-}
+        if (rawTrim === '3') {
+            userCurrentOption.set(from, '3');
+            await delay(1000);
+            try { await chat.sendStateTyping(); } catch (e) { /* ignora */ }
+            await delay(1000);
+            await client.sendMessage(from, '👤 Beleza!\nUm *atendente* vai te chamar em instantes.\n\nEnquanto isso, fica à vontade para enviar dúvidas ou pedidos 😊\n\nSe quiser voltar ao menu inicial, digite 4');
+            return;
+        }
 
-// ---------- RESTART CONTROLADO ----------
-// ✅ CORREÇÃO 4: Uma única função de restart com lock global,
-// eliminando a corrida entre watchdog, disconnected e keepAlive
-// que causava múltiplos "authenticated" simultâneos.
-let restartTimer = null;
-
-function scheduleRestart(delayMs = 15000) {
-    if (lifecycleLock) {
-        console.log('🔒 Restart já agendado/em curso — ignorando nova solicitação.');
-        return;
-    }
-    lifecycleLock = true;
-    if (restartTimer) clearTimeout(restartTimer);
-    console.log(`⏳ Restart agendado em ${delayMs / 1000}s...`);
-    restartTimer = setTimeout(() => doRestart(), delayMs);
-}
-
-async function doRestart() {
-    console.warn('🔄 Executando restart do client...');
-    stopKeepAlive();
-    readyFired = false;
-
-    const oldClient = client;
-    client = null;
-
-    await destroyClient(oldClient);
-
-    console.log('🆕 Criando novo client...');
-    try {
-        client = createClient();
-        await client.initialize();
     } catch (err) {
-        console.error('❌ Erro ao inicializar novo client:', err?.message);
-        lifecycleLock = false;
-        scheduleRestart(30000);
+        console.error('❌ Erro no processamento da mensagem:', err);
     }
-}
-
-// Watchdog de segurança: só aciona se nada mais estiver cuidando disso
-setInterval(() => {
-    if (!readyFired && !lifecycleLock) {
-        console.warn('🐕 Watchdog: sem ready e sem lock — forçando restart.');
-        scheduleRestart(5000);
-    }
-}, 120000);
-
-// ---------- INICIALIZAÇÃO ----------
-client = createClient();
-lifecycleLock = true;
-client.initialize().catch(err => {
-    console.error('Erro na inicialização:', err);
-    lifecycleLock = false;
 });
 
-// ---------- EXPRESS ----------
+// CORREÇÃO: horário consistente (5h às 23h)
+const foraDoHorario = () => {
+    const agora = new Date();
+    const horaUTC = agora.getUTCHours();
+    const horaBrasilia = (horaUTC - 3 + 24) % 24;
+    return (horaBrasilia < 5 || horaBrasilia >= 23);
+};
+
+// --- Express health / status ---
 const app = express();
-app.use(express.static(publicDir));
+const PORT = process.env.PORT || 8080;
 
-app.get('/', (req, res) => {
-    res.send(readyFired
-        ? '✅ WhatsApp Conectado — Bot ativo!'
-        : '⏳ Inicializando... Acesse <a href="/qr">/qr</a> para escanear o QR Code');
-});
+app.get('/', (req, res) => res.send('OK'));
 
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        res.send(`
-            <html>
-            <head>
-                <meta http-equiv="refresh" content="10">
-                <title>QR Code - Pamonha e Cia Bot</title>
-            </head>
-            <body style="background:#111;color:#fff;text-align:center;padding:50px;font-family:sans-serif;">
-                <h2>📱 Escaneie o QR Code no WhatsApp</h2>
-                <p style="color:#aaa;">Atualiza automaticamente a cada 10 segundos</p>
-                <img src="/qr.png?t=${Date.now()}" style="border:10px solid #fff;max-width:300px;border-radius:8px;"/>
-                <p style="color:#aaa;font-size:12px;">Se o QR sumir, o bot conectou com sucesso!</p>
-            </body>
-            </html>`);
+        const html = '' +
+            '<html>' +
+            '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">' +
+            '<div style="text-align:center">' +
+            '<h3>Escaneie este QR code para conectar o WhatsApp</h3>' +
+            '<img src="/qr.png" style="max-width:90vw;"/>' +
+            '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>' +
+            '</div>' +
+            '</body>' +
+            '</html>';
+        return res.send(html);
     } else {
-        res.send(`
-            <html>
-            <head><meta http-equiv="refresh" content="5"><title>Aguardando QR...</title></head>
-            <body style="background:#111;color:#fff;text-align:center;padding:50px;font-family:sans-serif;">
-                <h2>⏳ Gerando QR Code...</h2>
-                <p>Aguarde alguns segundos, a página atualiza automaticamente.</p>
-            </body>
-            </html>`);
+        return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
     }
 });
 
-// Rota para resetar sessão sem precisar editar código
-app.get('/reset-session', (req, res) => {
-    const sessionDir = path.join(sessionPath, 'session-mili-bot');
+app.get('/qr.png', (req, res) => {
+    const imgPath = path.join(publicDir, 'qr.png');
+    if (fs.existsSync(imgPath)) {
+        res.sendFile(imgPath);
+    } else {
+        res.status(404).send('QR não disponível');
+    }
+});
+
+app.listen(PORT, '0.0.0.0', () => console.log('HTTP server rodando na porta ' + PORT));
+
+async function shutdown() {
+    console.log('Shutdown iniciado — fechando client...');
     try {
-        if (fs.existsSync(sessionDir)) {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-            res.send('✅ Sessão deletada! Aguarde 30s e acesse <a href="/qr">/qr</a> para reconectar.');
-            console.log('🗑️ Sessão deletada via /reset-session');
-            scheduleRestart(3000);
-        } else {
-            res.send('ℹ️ Nenhuma sessão encontrada para deletar.');
-        }
+        await client.destroy();
     } catch (e) {
-        res.send('❌ Erro ao deletar sessão: ' + e.message);
+        console.error('Erro ao destruir client:', e);
     }
-});
-
-app.listen(PORT, '0.0.0.0', () => console.log('🚀 Servidor HTTP na porta', PORT));
-
-// ---------- SHUTDOWN LIMPO ----------
-async function shutdown(signal) {
-    console.log(`\n🛑 ${signal} recebido. Encerrando...`);
-    stopKeepAlive();
-    await destroyClient(client);
     process.exit(0);
 }
-process.on('SIGINT',  () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', err => {
+    console.error('Uncaught Exception:', err);
+});
