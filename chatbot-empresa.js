@@ -362,28 +362,26 @@ app.get('/', (req, res) => res.send('OK'));
 app.get('/qr', (req, res) => {
     const imgPath = path.join(publicDir, 'qr.png');
     if (fs.existsSync(imgPath)) {
-        const html = '' +
+        const html =
             '<html>' +
+            '<head><meta http-equiv="refresh" content="30"></head>' +
             '<body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff">' +
             '<div style="text-align:center">' +
             '<h3>Escaneie este QR code para conectar o WhatsApp</h3>' +
-            '<img src="/qr.png" style="max-width:90vw;"/>' +
-            '<p style="opacity:.7">Atualiza automaticamente quando um novo QR for emitido.</p>' +
+            '<img src="/qr.png?t=' + Date.now() + '" style="max-width:90vw;"/>' +
+            '<p style="opacity:.7">Atualiza automaticamente a cada 30 segundos.</p>' +
             '</div>' +
             '</body>' +
             '</html>';
         return res.send(html);
     } else {
-        return res.send('QR ainda não gerado — aguarde alguns segundos e recarregue a página.');
-    }
-});
-
-app.get('/qr.png', (req, res) => {
-    const imgPath = path.join(publicDir, 'qr.png');
-    if (fs.existsSync(imgPath)) {
-        res.sendFile(imgPath);
-    } else {
-        res.status(404).send('QR não disponível');
+        return res.send(
+            '<html><head><meta http-equiv="refresh" content="5"></head>' +
+            '<body style="background:#111;color:#fff;text-align:center;padding:50px">' +
+            '<h2>⏳ Gerando QR Code...</h2>' +
+            '<p>Aguarde alguns segundos, a página atualiza automaticamente.</p>' +
+            '</body></html>'
+        );
     }
 });
 
