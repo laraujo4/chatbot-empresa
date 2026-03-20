@@ -25,7 +25,7 @@ COPY package*.json ./
 # Ajusta dono e instala dependências como usuário node
 RUN chown -R node:node /app
 USER node
-RUN npm ci --production --no-audit --progress=false
+RUN npm install --production --no-audit --progress=false
 
 # Copia o restante do código com dono correto
 COPY --chown=node:node . .
