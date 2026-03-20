@@ -387,6 +387,21 @@ app.get('/qr.png', (req, res) => {
     }
 });
 
+app.get('/reset-session', (req, res) => {
+    const sessionDir = path.join(__dirname, 'session', 'session-mili-bot');
+    try {
+        if (fs.existsSync(sessionDir)) {
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+            console.log('🗑️ Sessão deletada via /reset-session');
+            res.send('✅ Sessão deletada! Aguarde 15s e acesse <a href="/qr">/qr</a> para reconectar.');
+        } else {
+            res.send('ℹ️ Nenhuma sessão encontrada para deletar.');
+        }
+    } catch (e) {
+        res.send('❌ Erro ao deletar sessão: ' + e.message);
+    }
+});
+
 app.listen(PORT, '0.0.0.0', () => console.log('HTTP server rodando na porta ' + PORT));
 
 async function shutdown() {
