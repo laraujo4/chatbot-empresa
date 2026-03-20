@@ -7,7 +7,6 @@ const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const path    = require('path');
 
-
 // ---------- CONFIG ----------
 const PORT        = process.env.PORT || 8080;
 const sessionPath = path.join(__dirname, 'wwebjs_auth_session');
@@ -16,11 +15,14 @@ const publicDir   = path.join(__dirname, 'public');
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 if (!fs.existsSync(publicDir))   { fs.mkdirSync(publicDir,   { recursive: true }); }
 
+// ✅ CORREÇÃO 1: RESET_SESSION agora vem DEPOIS de sessionPath ser definido
 if (process.env.RESET_SESSION === 'true') {
     const sessionDir = path.join(sessionPath, 'session-mili-bot');
     if (fs.existsSync(sessionDir)) {
         fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log('🗑️ Sessão deletada via variável de ambiente!');
+        console.log('🗑️ Sessão deletada via variável de ambiente! Reiniciando sem sessão...');
+    } else {
+        console.log('ℹ️ RESET_SESSION=true mas pasta de sessão não encontrada (já estava limpa).');
     }
 }
 
@@ -59,8 +61,10 @@ let lastQr          = null;
 let qrWriteTimeout  = null;
 let readyFired      = false;
 let client          = null;
-let initializingNow = false;
 let keepAliveTimer  = null;
+
+// ✅ CORREÇÃO 2: Lock único para evitar múltiplas instâncias simultâneas
+let lifecycleLock = false;
 
 // ---------- HELPERS ----------
 async function safeGetContact(msg) {
@@ -85,7 +89,6 @@ async function safeGetContact(msg) {
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
-// Promise que resolve após `ms` milissegundos — usada para timeouts em operações críticas
 const withTimeout = (promise, ms, label) =>
     Promise.race([
         promise,
@@ -121,34 +124,25 @@ function agendarLimpezaDiaria() {
 agendarLimpezaDiaria();
 
 // ---------- DESTROY ROBUSTO ----------
-// CORREÇÃO: em vez de só chamar client.destroy() (que lança ProtocolError quando
-// o browser já fechou), esta função tenta encerrar o browser diretamente primeiro,
-// depois tenta o destroy() com timeout, e ignora qualquer erro em ambos os passos.
 async function destroyClient(c) {
     if (!c) return;
-
-    // Passo 1: tenta fechar o browser diretamente (sem passar pelo CDP)
     try {
         const browser = c.pupBrowser || c.browser || c.pupPage?.browser?.();
         if (browser) {
             console.log('🔫 Fechando browser diretamente...');
             await withTimeout(browser.close(), 5000, 'browser.close');
-            console.log('✅ Browser fechado com sucesso.');
+            console.log('✅ Browser fechado.');
         }
     } catch (e) {
         console.warn('⚠️ browser.close() falhou (ignorado):', e?.message);
     }
-
-    // Passo 2: tenta o destroy() normal com timeout de segurança
     try {
         await withTimeout(c.destroy(), 8000, 'client.destroy');
         console.log('✅ client.destroy() concluído.');
     } catch (e) {
-        // ProtocolError, Target closed, Timeout — todos são esperados aqui
         console.warn('⚠️ client.destroy() ignorado:', e?.message);
     }
-
-    await delay(1500); // Pequena pausa para o SO liberar recursos
+    await delay(2000);
 }
 
 // ---------- KEEP-ALIVE ----------
@@ -162,12 +156,12 @@ function startKeepAlive(c) {
             if (state !== 'CONNECTED') {
                 console.warn('⚠️ keepAlive detectou estado não-CONNECTED:', state, '— reconectando');
                 readyFired = false;
-                ensureReadyOrRestart();
+                scheduleRestart(10000);
             }
         } catch (e) {
             console.warn('⚠️ keepAlive falhou — reconectando:', e?.message);
             readyFired = false;
-            ensureReadyOrRestart();
+            scheduleRestart(10000);
         }
     }, 30 * 1000);
     console.log('💓 keepAlive iniciado (intervalo: 30s)');
@@ -214,14 +208,13 @@ function createClient() {
                 '--disable-software-rasterizer'
             ]
         },
-        webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1017424380-alpha.html',
-        }
+        // ✅ CORREÇÃO 3: webVersionCache removido — deixa o whatsapp-web.js
+        // escolher a versão compatível automaticamente. A versão fixada
+        // estava obsoleta e causava travamento silencioso após "authenticated".
     });
 
     c.on('qr', async qr => {
-        console.log('🟨 [EVENT] qr recebido');
+        console.log('🟨 [EVENT] qr recebido — escaneie em /qr');
         try { qrcode.generate(qr, { small: true }); } catch (e) {}
         if (qrWriteTimeout) clearTimeout(qrWriteTimeout);
         qrWriteTimeout = setTimeout(async () => {
@@ -236,20 +229,15 @@ function createClient() {
     });
 
     c.on('authenticated', () => {
-        console.log('🔓 [EVENT] authenticated');
-        setTimeout(async () => {
-            if (readyFired) return;
-            console.warn('⏳ 90s após "authenticated" sem "ready". Diagnóstico:');
-            try { console.log('📁 sessionPath:', fs.readdirSync(sessionPath)); } catch (e) {}
-            try {
-                const pup = c.pupBrowser || c.browser;
-                if (pup) {
-                    const pages = await pup.pages();
-                    console.log('🌐 pages abertas:', pages.length);
-                    for (const p of pages) { try { console.log('  -', p.url()); } catch (e) {} }
-                }
-            } catch (e) {}
-        }, 90000);
+        console.log('🔓 [EVENT] authenticated — aguardando ready...');
+        // Avisa se ready não disparar em 60s
+        setTimeout(() => {
+            if (!readyFired) {
+                console.error('🚨 ready não disparou 60s após authenticated!');
+                console.error('🚨 Provável causa: versão do WA Web incompatível ou sessão corrompida.');
+                console.error('🚨 Acesse /reset-session e reinicie o serviço.');
+            }
+        }, 60000);
     });
 
     c.on('auth_failure', msg => {
@@ -258,14 +246,15 @@ function createClient() {
             const sessionDir = path.join(sessionPath, 'session-mili-bot');
             if (fs.existsSync(sessionDir)) {
                 fs.rmSync(sessionDir, { recursive: true, force: true });
-                console.log('🗑️ Sessão corrompida removida. Reinicie para gerar novo QR.');
+                console.log('🗑️ Sessão corrompida removida automaticamente.');
             }
         } catch (e) { console.warn('Não foi possível limpar sessão:', e); }
+        scheduleRestart(5000);
     });
 
     c.on('ready', () => {
-        readyFired      = true;
-        initializingNow = false;
+        readyFired    = true;
+        lifecycleLock = false;
         console.log('✅ [EVENT] ready — Bot pronto para receber mensagens!');
         startKeepAlive(c);
     });
@@ -274,7 +263,7 @@ function createClient() {
         readyFired = false;
         stopKeepAlive();
         console.warn('⚠️ [EVENT] disconnected:', reason);
-        setTimeout(() => ensureReadyOrRestart(), 10000);
+        scheduleRestart(15000);
     });
 
     c.on('change_state',         s      => console.log('🔄 [EVENT] change_state ->', s));
@@ -374,48 +363,58 @@ function createClient() {
     return c;
 }
 
-// ---------- WATCHDOG ----------
-let reconnecting = false;
+// ---------- RESTART CONTROLADO ----------
+// ✅ CORREÇÃO 4: Uma única função de restart com lock global,
+// eliminando a corrida entre watchdog, disconnected e keepAlive
+// que causava múltiplos "authenticated" simultâneos.
+let restartTimer = null;
 
-async function ensureReadyOrRestart() {
-    if (readyFired || reconnecting || initializingNow) return;
-    reconnecting = true;
-    console.warn('⚠️ Watchdog: encerrando client atual e reinicializando...');
-    stopKeepAlive();
-
-    const oldClient = client;
-    client = null; // Limpa referência global imediatamente
-
-    try {
-        // CORREÇÃO: usa destroyClient() robusto em vez de client.destroy() direto
-        await destroyClient(oldClient);
-
-        console.log('🔄 Criando novo client...');
-        client = createClient();
-        initializingNow = true;
-        await client.initialize();
-
-    } catch (err) {
-        console.error('❌ Erro crítico no watchdog após destroy:', err?.message);
-        initializingNow = false;
-        // Agenda nova tentativa em 30s em vez de travar
-        setTimeout(() => { reconnecting = false; ensureReadyOrRestart(); }, 30000);
+function scheduleRestart(delayMs = 15000) {
+    if (lifecycleLock) {
+        console.log('🔒 Restart já agendado/em curso — ignorando nova solicitação.');
         return;
     }
-
-    reconnecting = false;
+    lifecycleLock = true;
+    if (restartTimer) clearTimeout(restartTimer);
+    console.log(`⏳ Restart agendado em ${delayMs / 1000}s...`);
+    restartTimer = setTimeout(() => doRestart(), delayMs);
 }
 
+async function doRestart() {
+    console.warn('🔄 Executando restart do client...');
+    stopKeepAlive();
+    readyFired = false;
+
+    const oldClient = client;
+    client = null;
+
+    await destroyClient(oldClient);
+
+    console.log('🆕 Criando novo client...');
+    try {
+        client = createClient();
+        await client.initialize();
+    } catch (err) {
+        console.error('❌ Erro ao inicializar novo client:', err?.message);
+        lifecycleLock = false;
+        scheduleRestart(30000);
+    }
+}
+
+// Watchdog de segurança: só aciona se nada mais estiver cuidando disso
 setInterval(() => {
-    if (!readyFired && !initializingNow && !reconnecting) ensureReadyOrRestart();
+    if (!readyFired && !lifecycleLock) {
+        console.warn('🐕 Watchdog: sem ready e sem lock — forçando restart.');
+        scheduleRestart(5000);
+    }
 }, 120000);
 
 // ---------- INICIALIZAÇÃO ----------
 client = createClient();
-initializingNow = true;
+lifecycleLock = true;
 client.initialize().catch(err => {
     console.error('Erro na inicialização:', err);
-    initializingNow = false;
+    lifecycleLock = false;
 });
 
 // ---------- EXPRESS ----------
@@ -453,6 +452,23 @@ app.get('/qr', (req, res) => {
                 <p>Aguarde alguns segundos, a página atualiza automaticamente.</p>
             </body>
             </html>`);
+    }
+});
+
+// Rota para resetar sessão sem precisar editar código
+app.get('/reset-session', (req, res) => {
+    const sessionDir = path.join(sessionPath, 'session-mili-bot');
+    try {
+        if (fs.existsSync(sessionDir)) {
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+            res.send('✅ Sessão deletada! Aguarde 30s e acesse <a href="/qr">/qr</a> para reconectar.');
+            console.log('🗑️ Sessão deletada via /reset-session');
+            scheduleRestart(3000);
+        } else {
+            res.send('ℹ️ Nenhuma sessão encontrada para deletar.');
+        }
+    } catch (e) {
+        res.send('❌ Erro ao deletar sessão: ' + e.message);
     }
 });
 
