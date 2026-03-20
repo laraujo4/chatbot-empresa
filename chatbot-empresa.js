@@ -1,29 +1,12 @@
 'use strict';
 
-/**
- * BOT WHATSAPP - PAMONHA E CIA
- * Versão estável para Railway
- *
- * Correções aplicadas:
- * 1. webVersionCache com URL estável (resolve loop de QR)
- * 2. Filtro de msg.type corrigido (resolvia zero respostas)
- * 3. Ping keepAlive a cada 30s (evita WebSocket zumbi)
- * 4. sendMenu usa `c` local, não a variável global `client`
- * 5. Watchdog com intervalo seguro (120s) e flag initializingNow
- * 6. Limpeza de sessão corrompida no auth_failure
- * 7. Reconexão automática no evento disconnected
- * 8. Flags do Puppeteer otimizadas para Railway
- * 9. SIGTERM tratado para shutdown limpo
- * 10. CORREÇÃO: destroyClient() robusto — mata o browser diretamente
- *     antes de chamar destroy(), evitando ProtocolError: Target closed
- */
-
 const qrcode  = require('qrcode-terminal');
 const QRCode  = require('qrcode');
 const fs      = require('fs');
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const path    = require('path');
+
 
 // ---------- CONFIG ----------
 const PORT        = process.env.PORT || 8080;
@@ -32,6 +15,14 @@ const publicDir   = path.join(__dirname, 'public');
 
 if (!fs.existsSync(sessionPath)) { fs.mkdirSync(sessionPath, { recursive: true }); }
 if (!fs.existsSync(publicDir))   { fs.mkdirSync(publicDir,   { recursive: true }); }
+
+if (process.env.RESET_SESSION === 'true') {
+    const sessionDir = path.join(sessionPath, 'session-mili-bot');
+    if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log('🗑️ Sessão deletada via variável de ambiente!');
+    }
+}
 
 // ---------- PERSISTÊNCIA SAUDAÇÕES ----------
 const greetingsFile = path.join(sessionPath, 'greetings.json');
