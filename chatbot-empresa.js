@@ -355,6 +355,7 @@ const foraDoHorario = () => {
 
 // --- Express health / status ---
 const app = express();
+app.use(express.static(publicDir));
 const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => res.send('OK'));
