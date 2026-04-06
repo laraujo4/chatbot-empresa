@@ -306,7 +306,7 @@ client.on('message', async msg => {
             }
             if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
             await delay(DELAY_PADRAO);
-            await client.sendMessage(from, '📋 Te enviamos o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉\n\nSe quiser voltar ao menu inicial, digite 4');
+            await client.sendMessage(from, 'Te enviamos o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉\n\nSe quiser voltar ao menu inicial, digite 4');
             return;
         }
 
