@@ -285,17 +285,6 @@ client.on('message', async msg => {
                 markGreetedNow(from);
                 return;
             }
-
-            // ✅ Texto livre nas opções 1 ou 2 = pedido recebido
-            const opcaoAtual = userCurrentOption.get(from);
-            if (opcaoAtual === '1' || opcaoAtual === '2') {
-                await delay(10000);
-                if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
-                await delay(DELAY_PADRAO);
-                await client.sendMessage(from, '✅ Recebemos seu pedido! Em breve entraremos em contato 😊');
-                return;
-            }
-
             return;
         }
 
@@ -304,9 +293,6 @@ client.on('message', async msg => {
             if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
             await delay(DELAY_PADRAO);
             await client.sendMessage(from, '🛵 Entregamos nossos produtos fresquinhos em Praia Grande, Santos, São Vicente e Mongaguá! Para outras cidades, consulte disponibilidade.\n\nJunto com o seu pedido, informe também o seu *endereço (rua, número e bairro)*.');
-            if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
-            await delay(DELAY_PADRAO);
-            await client.sendMessage(from, '📋 Aqui está o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉');
             try {
                 const mediaPath = './Cardápio Empresa.jpg';
                 if (fs.existsSync(mediaPath)) {
@@ -318,8 +304,9 @@ client.on('message', async msg => {
             } catch (err) {
                 console.error('Erro ao enviar mídia:', err);
             }
+            if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
             await delay(DELAY_PADRAO);
-            await client.sendMessage(from, 'Se quiser voltar ao menu inicial, digite 4');
+            await client.sendMessage(from, '📋 Te enviamos o nosso cardápio!\n\nA taxa de entrega é de R$ 5,00, e elas são feitas das 8h às 17h! 😉\n\nSe quiser voltar ao menu inicial, digite 4');
             return;
         }
 
