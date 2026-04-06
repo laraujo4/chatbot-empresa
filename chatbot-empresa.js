@@ -202,12 +202,13 @@ async function sendMenu(from, contact) {
         await delay(DELAY_PADRAO);
         const menu = [
             'Olá, ' + firstName + '! Seja bem-vindo à *Pamonha e Cia* 🌽',
-            'Sou seu assistente virtual!',
             '',
             'Por favor, escolha uma opção *(digite apenas o número)*:',
             '',
-            '1️⃣ Fazer um pedido de derivados de milho (pamonha, curau, suco, bolo e milho a granel)',
-            '2️⃣ Encomendar saco de milho',
+            '1️⃣ Fazer um pedido de derivados de milho *(pamonha, curau, suco, bolo e milho a granel)*',
+            '',
+            '2️⃣ Encomendar *saco de milho*',
+            '',
             '3️⃣ Falar com um atendente'
         ].join('\n');
         await client.sendMessage(from, menu);
