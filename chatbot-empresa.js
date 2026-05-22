@@ -8,7 +8,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const puppeteer = require('puppeteer');
 const path = require('path');
 
-// pasta de sessão (pode ser sobrescrita por variável de ambiente)
+// pasta de sessão
 const sessionPath = process.env.SESSION_PATH || '/data/session';
 if (!fs.existsSync(sessionPath)) {
     fs.mkdirSync(sessionPath, { recursive: true });
@@ -114,24 +114,6 @@ async function safeGetContact(msg) {
     return { pushname: 'amigo', id: { _serialized: from } };
 }
 
-// ✅ Verifica se já enviamos alguma mensagem para esse contato HOJE
-async function jaEnviamosHoje(chat) {
-    try {
-        const msgs = await chat.fetchMessages({ limit: 50 });
-        const hoje = hojeEmBrasil();
-        return msgs.some(m => {
-            if (!m.fromMe) return false;
-            // converte timestamp Unix para data no fuso de Brasília
-            const dataMsg = new Date((m.timestamp * 1000) - (3 * 60 * 60 * 1000))
-                .toISOString().slice(0, 10);
-            return dataMsg === hoje;
-        });
-    } catch (e) {
-        console.warn('Não foi possível verificar histórico:', e?.message);
-        return false;
-    }
-}
-
 /* QR code */
 client.on('qr', async qr => {
     try {
@@ -160,7 +142,18 @@ client.on('disconnected', reason => console.warn('Cliente desconectado:', reason
 
 client.initialize();
 
-// ✅ Delay padrão de 3 segundos para todas as respostas
+// ✅ CORREÇÃO: rastreia contatos que receberam mensagem nossa hoje
+// Substitui o fetchMessages que causava erro e consumo excessivo de memória
+const contatosMensagadosHoje = new Set();
+
+client.on('message_create', msg => {
+    if (msg.fromMe && msg.to && !msg.to.endsWith('@g.us')) {
+        contatosMensagadosHoje.add(msg.to);
+        console.log('📤 Mensagem enviada registrada para:', msg.to);
+    }
+});
+
+// delay e constantes
 const delay = ms => new Promise(res => setTimeout(res, ms));
 const DELAY_PADRAO = 3000;
 
@@ -177,10 +170,12 @@ function agendarLimpezaDiaria() {
     console.log('🕛 Limpeza agendada para daqui', Math.round(ms / 60000), 'minutos');
     setTimeout(() => {
         clientesAvisadosForaDoHorario.clear();
-        console.log('🧹 Lista fora do horário limpa!');
+        contatosMensagadosHoje.clear();
+        console.log('🧹 Listas limpas!');
         setInterval(() => {
             clientesAvisadosForaDoHorario.clear();
-            console.log('🧹 Lista fora do horário limpa (rotina diária)');
+            contatosMensagadosHoje.clear();
+            console.log('🧹 Listas limpas (rotina diária)');
         }, 24 * 60 * 60 * 1000);
     }, ms);
 }
@@ -250,23 +245,22 @@ client.on('message', async msg => {
             .trim();
 
         const greetingsList = [
-            'menu', 'teste', 'boa', 'boa noite', 'boa tarde', 'bom dia', 'boa dia',
-            'oi', 'oii', 'ola', 'oi bom dia', 'oi boa tarde', 'boa tardr', 'oi boa noite',
-            'oi, bom dia', 'oi, boa tarde', 'oi, boa noite', 'ola'
+            'menu', 'boa noite', 'boa tarde', 'bom dia', 'boa dia',
+            'oi', 'oii', 'ola', 'oi bom dia', 'oi boa tarde', 'oi boa noite',
+            'oi, bom dia', 'oi, boa tarde', 'oi, boa noite'
         ];
 
         const isGreeting = greetingsList.some(g => text.includes(g.replace(/á/g, 'a')));
 
         if (isGreeting) {
-            // Ignora se já saudamos hoje (em memória rápida)
             if (hasGreetedToday(from)) {
-                console.log('Já enviamos saudação hoje para', from, '— silêncio.');
+                console.log('Já saudamos hoje:', from, '— silêncio.');
                 return;
             }
 
-            // ✅ Ignora se já enviamos QUALQUER mensagem para esse contato hoje
-            if (chat && await jaEnviamosHoje(chat)) {
-                console.log('Já conversamos com', from, 'hoje — ignorando saudação automática.');
+            // ✅ Verificação sem fetchMessages — instantânea e sem erro
+            if (contatosMensagadosHoje.has(from)) {
+                console.log('Já enviamos mensagem hoje para', from, '— ignorando saudação.');
                 return;
             }
 
@@ -285,6 +279,17 @@ client.on('message', async msg => {
                 markGreetedNow(from);
                 return;
             }
+
+            // ✅ Texto livre nas opções 1 ou 2 = confirmação de pedido recebido
+            const opcaoAtual = userCurrentOption.get(from);
+            if (opcaoAtual === '1' || opcaoAtual === '2') {
+                await delay(10000);
+                if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
+                await delay(DELAY_PADRAO);
+                await client.sendMessage(from, '✅ Recebemos seu pedido! Em breve entraremos em contato 😊');
+                return;
+            }
+
             return;
         }
 
