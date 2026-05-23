@@ -280,16 +280,6 @@ client.on('message', async msg => {
                 return;
             }
 
-            // ✅ Texto livre nas opções 1 ou 2 = confirmação de pedido recebido
-            const opcaoAtual = userCurrentOption.get(from);
-            if (opcaoAtual === '1' || opcaoAtual === '2') {
-                await delay(10000);
-                if (chat) { try { await chat.sendStateTyping(); } catch (e) {} }
-                await delay(DELAY_PADRAO);
-                await client.sendMessage(from, '✅ Recebemos seu pedido! Em breve entraremos em contato 😊');
-                return;
-            }
-
             return;
         }
 
